@@ -1,0 +1,80 @@
+version: '3.8'
+
+services:
+  payments:
+    build: ./payments
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@payments_db:5432/payments_db
+    depends_on:
+      - payments_db
+
+  payments_db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: payments_db
+    volumes:
+      - payments_data:/var/lib/postgresql/data
+
+  accounts:
+    build: ./accounts
+    ports:
+      - "8002:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@accounts_db:5432/accounts_db
+    depends_on:
+      - accounts_db
+
+  accounts_db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: accounts_db
+    volumes:
+      - accounts_data:/var/lib/postgresql/data
+
+  crm:
+    build: ./crm
+    ports:
+      - "8003:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@crm_db:5432/crm_db
+    depends_on:
+      - crm_db
+
+  crm_db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: crm_db
+    volumes:
+      - crm_data:/var/lib/postgresql/data
+
+  delivery:
+    build: ./delivery
+    ports:
+      - "8004:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@delivery_db:5432/delivery_db
+    depends_on:
+      - delivery_db
+
+  delivery_db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: delivery_db
+    volumes:
+      - delivery_data:/var/lib/postgresql/data
+
+volumes:
+  payments_data:
+  accounts_data:
+  crm_data:
+  delivery_data:
