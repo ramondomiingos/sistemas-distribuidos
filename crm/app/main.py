@@ -44,3 +44,9 @@ def read_user_info(account_id: str):
     if user_info is None:
         raise HTTPException(status_code=404, detail="User info not found")
     return user_info
+
+@app.get("/info-users/")
+def list_user_info():
+    db = SessionLocal()
+    user_info = db.query(UserInfo).all()
+    return user_info

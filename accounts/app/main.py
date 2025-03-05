@@ -44,3 +44,9 @@ def read_user(account_id: str):
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+@app.get("/users/")
+def list_users():
+    db = SessionLocal()
+    users = db.query(User).all()
+    return users

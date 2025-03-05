@@ -55,3 +55,9 @@ def read_order(order_id: str):
     if order is None:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+    
+@app.get("/orders/")
+def list_orders():
+    db = SessionLocal()
+    orders = db.query(Order).all()
+    return orders

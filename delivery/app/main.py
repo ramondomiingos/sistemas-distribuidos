@@ -29,7 +29,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 class DeliveryCreate(BaseModel):
-    ord er_id: str
+    order_id: str
     status: str
     tracking_code: str
     estimated_delivery: datetime
@@ -54,10 +54,8 @@ def read_delivery(order_id: str):
         raise HTTPException(status_code=404, detail="Delivery not found")
     return delivery
 
-@app.get("/delivery")
-def read_delivery():
+@app.get("/delivery/")
+def list_deliveries():
     db = SessionLocal()
-    delivery = db.query(Delivery).all()
-    if delivery is None:
-        raise HTTPException(status_code=404, detail="Delivery not found")
-    return delivery
+    deliveries = db.query(Delivery).all()
+    return deliveries
