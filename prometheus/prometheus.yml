@@ -5,3 +5,7 @@ scrape_configs:
   - job_name: "accounts"
     static_configs:
       - targets: ["localhost:8010"]
+  - job_name: "middleaware"
+    static_configs:
+      - targets: ["localhost:8011"]
+

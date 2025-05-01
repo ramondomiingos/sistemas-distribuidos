@@ -103,6 +103,7 @@ services:
     build: ./middleware
     ports:
       - "8000:8000"
+      - "8011:8001"
     environment:
       - DATABASE_URL=postgresql://user:password@middleware_db/middlewaredb
       - KAFKA_BROKER=kafka:9092
