@@ -1,12 +1,16 @@
 # Rotas da API
 from typing import List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 import uuid
-from middleware.app.database import PrivacyRequest, Service, SessionLocal
-from middleware.app.schemas import PrivacyRequestCreate, PrivacyRequestResponse, ServiceCreate, ServiceResponse, StatusRequest
+from app.database import PrivacyRequest, Service, SessionLocal
+from app.schemas import PrivacyRequestCreate, PrivacyRequestResponse, ServiceCreate, ServiceResponse, StatusRequest
 from fastapi import APIRouter, HTTPException
 
+import json
+
+
 router = APIRouter()
+
 
 @router.post("/services/", response_model=ServiceResponse)
 def create_service(service: ServiceCreate):
@@ -35,21 +39,35 @@ def delete_service(service_id: str):
     return {"message": "Service deleted"}
 
 @router.post("/privacy_request/", response_model=PrivacyRequestResponse)
-def create_privacy_request(request: PrivacyRequestCreate):
+async def create_privacy_request(request: Request,body: PrivacyRequestCreate):
     db = SessionLocal()
     request_id = str(uuid.uuid4())
+    try:
+        db_request = PrivacyRequest(
+            id=request_id,
+            account_id=body.account_id,
+            operation=body.operation,
+            status=StatusRequest.CREATED
+        )
 
-    db_request = PrivacyRequest(
-        id=request_id,
-        account_id=request.account_id,
-        operation=request.operation,
-        status=StatusRequest.CREATED
-    )
-    db.add(db_request)
-    db.commit()
-    db.refresh(db_request)
-    return db_request
-
+        producer = request.app.state.producer
+        json_body = {
+            "id": request_id,
+            "account_id": body.account_id,
+            "operation": body.operation,
+            "status": StatusRequest.CREATED.value
+        }
+        await producer.send_and_wait('privacy-validate-topic', json.dumps(json_body).encode())
+        print(f"[Producer] Enviado: {json_body} para o tópico privacy-validate-topic")
+        
+        db.add(db_request)
+        db.commit()
+        db.refresh(db_request)
+        return db_request
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error creating privacy request: {str(e)}")
+    
 @router.get("/privacy_request/", response_model=List[PrivacyRequestResponse])
 def list_privacy_requests():
     db = SessionLocal()
@@ -63,3 +81,5 @@ def get_privacy_request(request_id: str):
     if not request:
         raise HTTPException(status_code=404, detail="Privacy request not found")
     return request
+
+
