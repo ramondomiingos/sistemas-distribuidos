@@ -5,3 +5,10 @@ psycopg2-binary
 pydantic
 kafka-python
 aiokafka
+opentelemetry-sdk
+opentelemetry-instrumentation
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-logging
+opentelemetry-exporter-prometheus
+prometheus_client

@@ -3,7 +3,9 @@ from fastapi import FastAPI, BackgroundTasks
 from typing import List, Optional
 import uuid
 from .io.routers import router 
-
+import os
+import logging
+from .telemetry import configure_otel
 from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
 from aiokafka.admin import NewTopic,AIOKafkaAdminClient
 
@@ -16,6 +18,15 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BROKER", "localhost:9092")
 # Inicializa o FastAPI
 app = FastAPI()
 app.include_router(router, prefix="/api/v1", tags=["privacy_request"])
+configure_otel(app)
+
+
+logger = logging.getLogger("middleware-service")
+logger.setLevel(logging.INFO)  # Garante nível INFO
+
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
 
 producer = None
 consumer_task = None
@@ -44,7 +55,7 @@ async def consumeValidateTopic():
     await consumer.start()
     try:
         async for msg in consumer:
-            print(f"[Consumer] Recebido: {msg.value.decode()} do tópico {msg.topic}")
+            logger.info(f"[Consumer] Recebido: {msg.value.decode()} do tópico {msg.topic}")
            
     finally:
         await consumer.stop()

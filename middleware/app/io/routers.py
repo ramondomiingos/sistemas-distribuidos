@@ -1,13 +1,18 @@
 # Rotas da API
+import logging
 from typing import List, Optional
+from venv import logger
 from fastapi import FastAPI, HTTPException, Request
 import uuid
 from app.database import PrivacyRequest, Service, SessionLocal
-from app.schemas import PrivacyRequestCreate, PrivacyRequestResponse, ServiceCreate, ServiceResponse, StatusRequest
+from app.schemas import OperationsExecution, PrivacyRequestCreate, PrivacyRequestResponse, ServiceCreate, ServiceResponse, StatusRequest
 from fastapi import APIRouter, HTTPException
 
 import json
 
+logger = logging.getLogger("middleware-service")
+logger.setLevel(logging.INFO)  # Garante nível INFO
+root_logger = logging.getLogger()
 
 router = APIRouter()
 
@@ -52,13 +57,15 @@ async def create_privacy_request(request: Request,body: PrivacyRequestCreate):
 
         producer = request.app.state.producer
         json_body = {
-            "id": request_id,
+            "request_id": request_id,
             "account_id": body.account_id,
-            "operation": body.operation,
-            "status": StatusRequest.CREATED.value
+            "operation": OperationsExecution.PREPARE_DELETE.value,
+            
         }
-        await producer.send_and_wait('privacy-validate-topic', json.dumps(json_body).encode())
-        print(f"[Producer] Enviado: {json_body} para o tópico privacy-validate-topic")
+        headers = [["operation", OperationsExecution.PREPARE_DELETE.value,], ["x-request-id",  request_id,]]
+        [(k, v.encode()) for k, v in headers]
+        await producer.send_and_wait('privacy-validate-topic', json.dumps(json_body).encode(), headers= [(k, v.encode()) for k, v in headers])
+        logger.info(f"[Producer] Enviado: {json_body} para o tópico privacy-validate-topic")
         
         db.add(db_request)
         db.commit()
