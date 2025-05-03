@@ -1,4 +1,3 @@
-
 import psycopg2
 from faker import Faker
 import random
@@ -47,6 +46,17 @@ DATABASES = {
 # Inicializa o Faker para gerar dados fictícios
 fake = Faker()
 
+# Cores ANSI para o terminal
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+
 # Função para conectar ao banco de dados
 def connect_db(db_config):
     conn = psycopg2.connect(
@@ -60,9 +70,9 @@ def connect_db(db_config):
 
 # Função para popular a tabela de PAYMENTS
 def populate_payments(conn, account_id, status=random.choice(["confirmed", "pending", "cancelled", "delayed"])):
-    
+
     cur = conn.cursor()
-    
+
     order_id = fake.uuid4()
     amount = round(random.uniform(100, 1000), 2)
     currency = "BRL"
@@ -142,6 +152,7 @@ def populate_delivery(conn, account_id, order_id, status = random.choice(["out_f
 
 # Função para popular a tabela de Services Middleware, por API
 def populate_middleware_services():
+    print(f"{Colors.BOLD}{Colors.CYAN}\n--- Populando Serviços cadastrados no Middleware via API ---\n{Colors.RESET}")
     services = [
     {
         "service_name": "payment",
@@ -162,12 +173,16 @@ def populate_middleware_services():
     ]
 
     for service in services:
-        res = requests.post('http://localhost:8000/api/v1/services/', json=service)
-        print(res.text, res.status_code)
-       
-   
+        try:
+            res = requests.post('http://localhost:8000/api/v1/services/', json=service)
+            status_color = Colors.GREEN if 200 <= res.status_code < 300 else Colors.RED
+            print(f"Serviço: {Colors.BOLD}{service['service_name']}{Colors.RESET} - Status: {Colors.BOLD}{status_color}{res.status_code}{Colors.RESET}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"{Colors.RED}Erro ao conectar com o middleware para o serviço {service['service_name']}: {e}{Colors.RESET}")
+
+
 def populate_scenario_1():
-    print("\n--- Cenário 1: Exclusão permitida por todos os microsserviços ---")
+    print(f"{Colors.BOLD}{Colors.BLUE}\n--- Cenário 1: Exclusão permitida por todos os microsserviços ---\n{Colors.RESET}")
     account_id = fake.uuid4()
 
     # Popula dados em todos os microsserviços
@@ -188,14 +203,14 @@ def populate_scenario_1():
     populate_delivery(delivery_conn, account_id, order_id, status="delivered") # Cria uma entrega confirmada
     delivery_conn.close()
 
-    print(f"Dados populados para account_id: {account_id}")
+    print(f"{Colors.GREEN}Dados populados para account_id: {Colors.BOLD}{account_id}{Colors.RESET}")
     print("Execute os passos do cenário 1 no middleware (publicar PREPARE_DELETE e PERFORM_DELETE).")
     print("Após a execução, verifique se os dados foram excluídos em todos os microsserviços.")
     # Não podemos simular a comunicação com Kafka e a lógica do middleware aqui.
     # Isso precisaria ser testado separadamente ou com uma integração maior.
 
 def populate_scenario_2():
-    print("\n--- Cenário 2: Exclusão negada por um microsserviço (payment)---")
+    print(f"{Colors.BOLD}{Colors.BLUE}\n--- Cenário 2: Exclusão negada por um microsserviço (payment) ---\n{Colors.RESET}")
     account_id = fake.uuid4()
 
     # Popula dados em todos os microsserviços
@@ -216,14 +231,14 @@ def populate_scenario_2():
     populate_delivery(delivery_conn, account_id, order_id, status="delivered") # Cria uma entrega confirmada
     delivery_conn.close()
 
-    print(f"Dados populados para account_id: {account_id} (com ordem pendente em PAYMENTS)")
+    print(f"{Colors.YELLOW}Dados populados para account_id: {Colors.BOLD}{account_id}{Colors.RESET} (com ordem pendente em PAYMENTS)")
     print("Execute o passo do cenário 2 no middleware (publicar PREPARE_DELETE).")
     print("Verifique se o PAYMENTS responde can_delete=false.")
     print("Verifique se o middleware não publica PERFORM_DELETE e nenhum dado é excluído.")
     # Novamente, a lógica do middleware não pode ser totalmente simulada aqui.
 
 def populate_scenario_3():
-    print("\n--- Cenário 3: Exclusão Parcial (Dados Inexistentes em Alguns Microsserviços) ---")
+    print(f"{Colors.BOLD}{Colors.BLUE}\n--- Cenário 3: Exclusão Parcial (Dados Inexistentes em Alguns Microsserviços) ---\n{Colors.RESET}")
     account_id = fake.uuid4()
 
     # Popula dados apenas em PAYMENTS e ACCOUNTS
@@ -235,12 +250,12 @@ def populate_scenario_3():
     populate_payments(payments_conn, account_id, status="confirmed") # Cria uma ordem confirmada
     payments_conn.close()
 
-    print(f"Dados populados para account_id: {account_id} (apenas em PAYMENTS e ACCOUNTS)")
+    print(f"{Colors.MAGENTA}Dados populados para account_id: {Colors.BOLD}{account_id}{Colors.RESET} (apenas em PAYMENTS e ACCOUNTS)")
     print("Execute os passos do cenário 3 no middleware (publicar PREPARE_DELETE e PERFORM_DELETE).")
     print("Verifique se os dados foram excluídos em PAYMENTS e ACCOUNTS e não em CRM e DELIVERY.")
 
 def populate_scenario_4():
-    print("\n--- Cenário 4: Falha na Comunicação com um Microsserviço ---")
+    print(f"{Colors.BOLD}{Colors.BLUE}\n--- Cenário 4: Falha na Comunicação com um Microsserviço ---\n{Colors.RESET}")
     account_id = fake.uuid4()
 
     # Popula dados em todos os microsserviços (para simular a existência)
@@ -261,7 +276,7 @@ def populate_scenario_4():
     populate_delivery(delivery_conn, account_id, order_id)
     delivery_conn.close()
 
-    print(f"Dados populados para account_id: {account_id}")
+    print(f"{Colors.YELLOW}Dados populados para account_id: {Colors.BOLD}{account_id}{Colors.RESET}")
     print("Simule o microsserviço CRM estando offline, pode desligar o container antes de iniciar a requisição /api/v1/privacy_request/.")
     print("Execute o passo do cenário 4 no middleware (publicar PREPARE_DELETE).")
     print("Verifique se o middleware não recebe resposta do CRM e não publica PERFORM_DELETE.")
@@ -269,19 +284,20 @@ def populate_scenario_4():
     print("Após simular o CRM voltando online, o middleware (se implementado corretamente com Kafka) deve processar a mensagem.")
 
 def populate_cenary_tests():
-
+    print(f"{Colors.BOLD}{Colors.GREEN}\n--- Iniciando População dos Cenários de Teste ---\n{Colors.RESET}")
     populate_scenario_1()
     populate_scenario_2()
     populate_scenario_3()
     populate_scenario_4()
+    print(f"{Colors.BOLD}{Colors.GREEN}\n--- População dos Cenários de Teste Concluída ---\n{Colors.RESET}")
 
 
 # Função principal
 def main():
-    # Gera um account_id único para todos os registros
-    for _ in range(10):
+    print(f"{Colors.BOLD}{Colors.YELLOW}\n--- Iniciando População Inicial do Banco de Dados ---\n{Colors.RESET}")
+    for i in range(3): # Reduzi para 3 para não poluir muito a saída inicial
         account_id = fake.uuid4()
-    
+
         # Popula ACCOUNTS
         accounts_conn = connect_db(DATABASES["accounts"])
         populate_accounts(accounts_conn, account_id)
@@ -302,10 +318,10 @@ def main():
         populate_delivery(delivery_conn, account_id,order_id)
         delivery_conn.close()
 
-        print(f"Dados populados com sucesso para account_id: {account_id}")
+        print(f"{Colors.GREEN}Dados populados com sucesso para account_id: {Colors.BOLD}{account_id}{Colors.RESET}")
+    populate_middleware_services()
+    print(f"{Colors.BOLD}{Colors.YELLOW}\n--- População Inicial do Banco de Dados Concluída ---\n{Colors.RESET}")
 
 if __name__ == "__main__":
-  main()
-  populate_middleware_services()
-  populate_cenary_tests()
-
+    main()
+    populate_cenary_tests()
