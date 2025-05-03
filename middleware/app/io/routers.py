@@ -52,7 +52,8 @@ async def create_privacy_request(request: Request,body: PrivacyRequestCreate):
             id=request_id,
             account_id=body.account_id,
             operation=body.operation,
-            status=StatusRequest.CREATED
+            status=StatusRequest.CREATED,
+            description=body.description,
         )
 
         producer = request.app.state.producer

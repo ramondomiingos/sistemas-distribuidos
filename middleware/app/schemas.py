@@ -4,9 +4,6 @@ from datetime import datetime
 import os
 from enum import Enum
 
-
-
-# Modelo Pydantic para validação de dados
 class OperationRequest(str, Enum):
     DELETE = "DELETE"
 
