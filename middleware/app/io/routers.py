@@ -21,7 +21,7 @@ router = APIRouter()
 def create_service(service: ServiceCreate):
     db = SessionLocal()
     service_id = str(uuid.uuid4())
-    db_service = Service(id=service_id, service_name=service.service_name)
+    db_service = Service(id=service_id, service_name=service.service_name, description=service.description)
     db.add(db_service)
     db.commit()
     db.refresh(db_service)
