@@ -10,3 +10,5 @@ opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-logging
 opentelemetry-exporter-prometheus
 prometheus_client
+kafka-python
+aiokafka
