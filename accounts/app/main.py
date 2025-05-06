@@ -46,6 +46,11 @@ logger.setLevel(logging.INFO)  # Garante nível INFO
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 
+# Reduz o nível de log do Kafka
+kafka_logger = logging.getLogger("aiokafka")
+kafka_logger.setLevel(logging.WARNING)  
+
+
 class UserCreate(BaseModel):
     name: str
     email: str

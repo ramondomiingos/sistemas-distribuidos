@@ -11,7 +11,7 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_SECURITY_ALLOW_EMBEDDING=true
     volumes:
-    - .prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml
+    - ./prometheus:/etc/prometheus
   payments:
     build: ./payments
     ports:

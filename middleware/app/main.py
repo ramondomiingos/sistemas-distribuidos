@@ -2,6 +2,8 @@ from fastapi import FastAPI, BackgroundTasks
 
 from typing import List, Optional
 import uuid
+import json
+from .schemas import OperationsExecution
 from .io.routers import router 
 import os
 import logging
@@ -28,6 +30,10 @@ logger.setLevel(logging.INFO)  # Garante nível INFO
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 
+# Reduz o nível de log do Kafka
+kafka_logger = logging.getLogger("aiokafka")
+kafka_logger.setLevel(logging.WARNING)  
+
 producer = None
 consumer_task = None
 
@@ -48,16 +54,49 @@ async def ensure_topic():
 # Consumer Kafka (roda em segundo plano)
 async def consumeValidateTopic():
     consumer = AIOKafkaConsumer(
-        'privacy-validate-topic',
+        'privacy-validate-response-topic',
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
-        group_id="fastapi-group"
+        group_id="middleware-group"
     )
     await consumer.start()
     try:
         async for msg in consumer:
-            logger.info(f"[Consumer] Recebido: {msg.value.decode()} do tópico {msg.topic}")
+            txt = json.loads(msg.value.decode())
+            request_id = txt.get("request_id")
+            account_id = txt.get("account_id")
+            logger.info(f"[Validate Response Consumer] Recebido: {txt} do tópico {msg.topic}")
+            producer = app.state.producer
+            json_body = {
+            "request_id": request_id,
+            "account_id": account_id,
+            "operation": OperationsExecution.PERFORM_DELETE.value
+            }
+
+            headers = [["operation", OperationsExecution.PERFORM_DELETE.value], ["x-request-id",  request_id]]
+            [(k, v.encode()) for k, v in headers]
+            
+            await producer.send_and_wait('privacy-execute-topic', json.dumps(json_body).encode(), headers= [(k, v.encode()) for k, v in headers])
+            logger.info(f"[Producer] Enviado: {json_body} para o tópico privacy-execute-topic")
+    except Exception as e:
+        logger.error(f"[Validate Response Consumer] Erro ao processar mensagem: {e}")   
+    finally:
+        logger.info(f"[Validate Response Consumer] Parando o consumidor privacy-validate-response-topic")
+        await consumer.stop()
+
+async def consumeExecuteTopic():
+    consumer = AIOKafkaConsumer(
+        'privacy-execute-response-topic',
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        group_id="middleware-group"
+    )
+    await consumer.start()
+    try:
+        async for msg in consumer:
+            logger.info(f"[Execute Response Consumer] Recebido: {msg.value.decode()} do tópico {msg.topic}")
            
     finally:
+        logger.info(f"[Validate Response Consumer] Parando o consumidor privacy-execute-response-topic")
+
         await consumer.stop()
 
 @app.on_event("startup")
@@ -69,7 +108,9 @@ async def startup_event():
     await app.state.producer.start()
 
     # Inicia o consumidor em background
-    app.state.consumer_task = asyncio.create_task(consumeValidateTopic())
+    app.state.consumer_task =asyncio.gather(
+        consumeValidateTopic(),
+        consumeExecuteTopic())
 
 @app.on_event("shutdown")
 async def shutdown_event():

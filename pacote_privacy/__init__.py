@@ -86,7 +86,8 @@ class KafkaConsumerWrapper:
                 if handler:
                     try:
                         result, reason = await handler(msg, self._producer)
-                        response_payload = {"result": result, "reason": reason, "original_message": msg.value.decode()}
+                        response_payload = {"result": result, "reason": reason  }
+                        response_payload.update(json.loads(msg.value.decode()))
                         await self._producer.send(response_topic, json.dumps(response_payload).encode('utf-8'))
                         logger.info(f"[Consumer {consumer_name}] Publicado resposta: {response_payload} no tópico {response_topic}")
                     except Exception as e:
