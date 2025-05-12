@@ -106,7 +106,7 @@ services:
     ports:
       - "5434:5432"
   middleware:
-    build: ./middleware
+    build: ./middleware-refactor
     ports:
       - "8000:8000"
       - "8011:8001"
@@ -122,6 +122,8 @@ services:
     depends_on:
       - middleware_db
       - kafka
+    command: >
+      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
 
   middleware_db:
     image: postgres:13
@@ -135,17 +137,15 @@ services:
       - "5437:5432"
 
   kafka:
-    image: bitnami/kafka:latest
+    image: bitnami/kafka:3.5
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_CFG_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_CFG_NODE_ID: 1 # Required for KRaft
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093 # Configure the controller quorum
-      KAFKA_CFG_PROCESS_ROLES: controller,broker # Set the combined controller and broker role
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
     ports:
       - "9092:9092"
     depends_on:

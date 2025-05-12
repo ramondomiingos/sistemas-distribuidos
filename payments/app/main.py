@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
 from sqlalchemy.ext.declarative import declarative_base
@@ -27,7 +28,7 @@ class Order(Base):
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+app = FastAPI(title='payment-service')
 
 class OrderCreate(BaseModel):
     order_id: str
@@ -61,3 +62,6 @@ def list_orders():
     db = SessionLocal()
     orders = db.query(Order).all()
     return orders
+# @app.on_event("startup")
+# async def startup():
+#     Instrumentator().instrument(app, metric_namespace='myproject', metric_subsystem='myservice').expose(app)

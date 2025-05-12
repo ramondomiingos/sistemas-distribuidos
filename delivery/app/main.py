@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
@@ -26,7 +27,7 @@ class Delivery(Base):
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+app = FastAPI(title='delivery-service')
 
 class DeliveryCreate(BaseModel):
     order_id: str

@@ -21,7 +21,7 @@ class UserInfo(Base):
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+app = FastAPI(title='crm-service')
 
 class UserInfoCreate(BaseModel):
     birth_day: str
