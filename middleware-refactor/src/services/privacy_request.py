@@ -14,7 +14,7 @@ class PrivacyRequestService:
         db_obj = PrivacyRequest(
             account_id=obj_in.account_id,
             operation=obj_in.operation,
-            status=obj_in.status or "PENDING",
+            status="CREATED",
             description=obj_in.description
         )
         self.db.add(db_obj)

@@ -31,9 +31,10 @@ class PrivacyRequestServiceService:
     def get(self, id: str) -> Optional[PrivacyRequestService]:
         return self.db.query(PrivacyRequestService).filter(PrivacyRequestService.id == id).first()
 
-    def get_by_privacy_request(self, privacy_request_id: str) -> List[PrivacyRequestService]:
+    def get_by_privacy_request_and_operation(self, privacy_request_id: str, operation) -> List[PrivacyRequestService]:
         return self.db.query(PrivacyRequestService)\
-            .filter(PrivacyRequestService.privacy_request_id == privacy_request_id)\
+            .filter(PrivacyRequestService.privacy_request_id == privacy_request_id) \
+            .filter(PrivacyRequestService.operation == operation) \
             .all()
 
     def get_by_service(self, service_id: str) -> List[PrivacyRequestService]:

@@ -5,7 +5,7 @@ import asyncio
 from typing import Dict, Any, Callable, Coroutine, Optional
 import aiokafka
 
-from src.controller.privacy_request_service import create_register_response
+from src.controller.privacy_request_service import create_register_validate_response, create_register_execute_response
 from src.kafka.config import KAFKA_BROKER, KAFKA_GROUP_ID
 from src.kafka.topics import (
     PRIVACY_VALIDATE_TOPIC,
@@ -209,7 +209,7 @@ async def handle_validate_response(message: Dict[str, Any]):
         result = message.get('result')
         logger.info(f"Received validation response for request {request_id} with result {result}")
 
-        await create_register_response(message)
+        await create_register_validate_response(message)
     except Exception as e:
         logger.error(f"Error processing validation response: {str(e)}")
 
@@ -217,9 +217,10 @@ async def handle_execute_response(message: Dict[str, Any]):
     """Handler para processar respostas de execução"""
     try:
         request_id = message.get('request_id')
-        status = message.get('status')
-        logger.info(f"Received execution response for request {request_id} with status {status}")
-        # Implemente sua lógica de processamento aqui
+        result = message.get('result')
+        logger.info(f"Received validation response for request {request_id} with result {result}")
+
+        await create_register_execute_response(message)
     except Exception as e:
         logger.error(f"Error processing execution response: {str(e)}")
 

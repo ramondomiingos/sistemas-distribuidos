@@ -1,4 +1,5 @@
 
+from math import e
 from .telemetry import configure_otel
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException
@@ -13,6 +14,8 @@ import os
 import logging
 import json
 from .pacote_privacy import KafkaConsumerWrapper
+from prometheus_fastapi_instrumentator import Instrumentator
+
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BROKER", "localhost:9092")
@@ -35,7 +38,7 @@ class User(Base):
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI()
+app = FastAPI(title='accounts-service')
 configure_otel(app)
 
 
@@ -88,20 +91,36 @@ def list_users():
 kafka_wrapper: Optional[KafkaConsumerWrapper] = None
 
 async def validate_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
-    logger.info(f"[Validate Handler] Processando: {msg.value.decode()}")
-    # Sua lógica de validação aqui
-    await asyncio.sleep(1) # Simula um processamento
-    if "error" in msg.value.decode():
-        return False, "Erro de validação encontrado"
+    txt = json.loads(msg.value.decode())
+    logger.info(f"[Validate Handler] Processando: {txt}")
+    # Sua lgica aqui
+    db = SessionLocal()
+    user =  db.query(User).filter(User.account_id == txt["account_id"]).first()
+    if user is None:
+        logger.warning(f"[Validate Handler] Usuário não encontrado: {txt['account_id']}")
+        return True, "Usuário não encontrado" 
+    logger.info(f"user find: {user}")
     return True, "Validação OK"
 
 async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
-    logger.info(f"[Execute Handler] Processando: {msg.value.decode()}")
+    txt = json.loads(msg.value.decode())
+    logger.info(f"[Execute Handler] Processando: {txt}")
     # Sua lógica de execução aqui
-    await asyncio.sleep(2) # Simula um processamento
-    if "fail" in msg.value.decode():
-        return False, "Falha na execução"
-    return True, "Execução concluída"
+    db = SessionLocal()
+    try:
+        delete_query =  db.query(User).filter(User.account_id == txt["account_id"]).first()
+        if delete_query is None:
+            logger.info(f"[Execute Handler] Usuário não encontrado: {txt['account_id']}")
+            return True, "Usuário não encontrado"
+        db.delete(delete_query)
+        db.commit()
+       
+        logger.info(f"Delete user with account_id: {txt['account_id']}")
+        return True, "Execução concluída"
+    except Exception as e:
+        logger.error(f"[Execute Handler] Erro ao executar: {e}")
+        return False, f"Erro ao executar {e}"
+    
 
 @app.on_event("startup")
 async def startup_event():
@@ -123,10 +142,10 @@ async def startup_event():
     kafka_wrapper = KafkaConsumerWrapper(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         consumers_config=consumers_config,
-        client_id_prefix="AccountsService",
+        client_id_prefix="account",
     )
     await kafka_wrapper.start()
-    app.state.kafka_wrapper = kafka_wrapper # Opcional: armazenar no estado do app
+    app.state.kafka_wrapper = kafka_wrapper 
 
 @app.on_event("shutdown")
 async def shutdown_event():
