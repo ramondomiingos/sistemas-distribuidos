@@ -1,5 +1,5 @@
 from fastapi import FastAPI, BackgroundTasks
-
+from .logic import save_response_validate_response, should_publish_execute
 from typing import List, Optional
 import uuid
 import json
@@ -10,6 +10,7 @@ import logging
 from .telemetry import configure_otel
 from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
 from aiokafka.admin import NewTopic,AIOKafkaAdminClient
+
 
 import os
 import asyncio
@@ -65,6 +66,15 @@ async def consumeValidateTopic():
             request_id = txt.get("request_id")
             account_id = txt.get("account_id")
             logger.info(f"[Validate Response Consumer] Recebido: {txt} do tópico {msg.topic}")
+
+            await save_response_validate_response(service_name=txt.get("service_name"),
+                                                  request_id=request_id,
+                                                  operation=OperationsExecution.PREPARE_DELETE.value,
+                                                  status=txt.get("status"),
+                                                  error_message=txt.get("error_message"))
+            if not should_publish_execute:
+                logger.info(f"[Validate Response Consumer] Finish consume")
+                return
             producer = app.state.producer
             json_body = {
             "request_id": request_id,
@@ -72,11 +82,18 @@ async def consumeValidateTopic():
             "operation": OperationsExecution.PERFORM_DELETE.value
             }
 
-            headers = [["operation", OperationsExecution.PERFORM_DELETE.value], ["x-request-id",  request_id]]
+            headers = [
+                ["operation", OperationsExecution.PERFORM_DELETE.value],
+                ["x-request-id",  request_id]
+            ]
             [(k, v.encode()) for k, v in headers]
             
-            await producer.send_and_wait('privacy-execute-topic', json.dumps(json_body).encode(), headers= [(k, v.encode()) for k, v in headers])
-            logger.info(f"[Producer] Enviado: {json_body} para o tópico privacy-execute-topic")
+            await producer.send_and_wait(
+                'privacy-execute-topic',
+                json.dumps(json_body).encode(),
+                headers= [(k, v.encode()) for k, v in headers])
+            logger.info(f"[Validate Response Consumer] [producer] Execução Enviada: {json_body} para o tópico privacy-execute-topic")
+            logger.info(f"[Validate Response Consumer] Finish consume")
     except Exception as e:
         logger.error(f"[Validate Response Consumer] Erro ao processar mensagem: {e}")   
     finally:

@@ -4,14 +4,14 @@ from typing import List, Optional
 from venv import logger
 from fastapi import FastAPI, HTTPException, Request
 import uuid
-from app.database import PrivacyRequest, Service, SessionLocal
-from app.schemas import OperationsExecution, PrivacyRequestCreate, PrivacyRequestResponse, ServiceCreate, ServiceResponse, StatusRequest
+from ..database import PrivacyRequest, Service, SessionLocal
+from ..schemas import OperationsExecution, PrivacyRequestCreate, PrivacyRequestResponse, ServiceCreate, ServiceResponse, StatusRequest
 from fastapi import APIRouter, HTTPException
 
 import json
 
 logger = logging.getLogger("middleware-service")
-logger.setLevel(logging.INFO)  # Garante nível INFO
+logger.setLevel(logging.INFO)
 root_logger = logging.getLogger()
 
 router = APIRouter()

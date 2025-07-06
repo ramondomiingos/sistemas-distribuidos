@@ -12,3 +12,4 @@ opentelemetry-exporter-prometheus
 prometheus_client
 kafka-python
 aiokafka
+prometheus-fastapi-instrumentator

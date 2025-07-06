@@ -18,7 +18,7 @@ import os
 
 # Configurações
 otlp_endpoint = os.environ.get("OTLP_ENDPOINT", "http://otel:4317")
-prometheus_port = int(os.environ.get("PROMETHEUS_PORT", "8001"))
+prometheus_port = int(os.environ.get("PROMETHEUS_PORT", "8099"))
 
 # Prometheus metric
 request_counter = Counter(
@@ -56,7 +56,7 @@ def configure_otel(app):
     root_logger.addHandler(handler)
     
     # --- MÉTRICAS (Prometheus via prometheus_client) ---
-    start_http_server(prometheus_port)
+    # start_http_server(prometheus_port)
 
     @app.middleware("http")
     async def prometheus_middleware(request, call_next):

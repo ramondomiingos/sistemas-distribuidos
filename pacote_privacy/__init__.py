@@ -13,7 +13,7 @@ class KafkaConsumerWrapper:
         bootstrap_servers: Union[str, List[str]],
         consumers_config: Dict[str, Dict],
         client_id_prefix: Optional[str] = None,
-        auto_offset_reset: str = "latest",
+        auto_offset_reset: str = "earliest",
         enable_auto_commit: bool = True,
         auto_commit_interval_ms: int = 5000,
         fetch_min_bytes: int = 1,

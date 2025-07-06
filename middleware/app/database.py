@@ -1,6 +1,9 @@
 
 from sqlalchemy import create_engine, Column, String
-from sqlalchemy.ext.declarative import declarative_base
+# from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
+
+
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 from sqlalchemy import Column, DateTime
@@ -8,7 +11,7 @@ from sqlalchemy.sql import func
 import os
 
 # Configurações do banco de dados
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@middleware_db:5432/middleware_db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5437/middlewaredb")
 
 # Conexão com o banco de dados
 engine = create_engine(DATABASE_URL)
