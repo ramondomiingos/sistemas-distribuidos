@@ -16,10 +16,21 @@ services:
     build: ./payments
     ports:
       - "8001:8000"
+      - "8012:8001"
+    volumes:
+      - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@payments_db/payments_db
+      - KAFKA_BROKER=kafka:9092
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=payments-service
     depends_on:
       - payments_db
+      - kafka
 
   payments_db:
     image: postgres:13
@@ -68,13 +79,21 @@ services:
     build: ./crm
     ports:
       - "8003:8000"
+      - "8013:8001"
+    volumes:
+      - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@crm_db/crm_db
+      - KAFKA_BROKER=kafka:9092
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=crm-service
     depends_on:
       - crm_db
       - kafka
-    volumes:
-      - ./pacote_privacy:/app/pacote_privacy
   crm_db:
     image: postgres:13
     environment:
@@ -90,10 +109,21 @@ services:
     build: ./delivery
     ports:
       - "8004:8000"
+      - "8014:8001"
+    volumes:
+      - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@delivery_db/delivery_db
+      - KAFKA_BROKER=kafka:9092
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=delivery-service
     depends_on:
       - delivery_db
+      - kafka
 
   delivery_db:
     image: postgres:13
@@ -137,7 +167,7 @@ services:
       - "5437:5432"
 
   kafka:
-    image: bitnami/kafka:3.5
+    image: bitnamilegacy/kafka:3.5
     environment:
       - KAFKA_BROKER_ID=1
       - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
@@ -152,7 +182,7 @@ services:
       - zookeeper
 
   zookeeper:
-    image: bitnami/zookeeper:latest
+    image: bitnamilegacy/zookeeper:latest
     environment:
       ALLOW_ANONYMOUS_LOGIN: "yes"
     ports:

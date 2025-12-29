@@ -77,7 +77,7 @@ def should_publish_execute(request_id: str):
     service_list =  ServiceService(db).get_multi()
     responses = PrivacyRequestServiceService(db).get_by_privacy_request_and_operation(request_id,
                                                                                       'PREPARE_DELETE')
-    return len(service_list) != len(responses)
+    return len(service_list) == len(responses)
 
 def should_finished_request(request_id: str):
     db = next(get_db())
