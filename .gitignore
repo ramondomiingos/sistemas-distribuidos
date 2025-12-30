@@ -1,0 +1,13 @@
+*/.idea/*
+
+.DS_Store
+
+.venv
+.idea
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+*.log

@@ -1,14 +1,36 @@
-version: '3.8'
 
 services:
+  otel:
+    image: grafana/otel-lgtm:0.7.1
+    ports:
+      - "3000:3000"
+      - "4317:4317"
+      - "9090:9090"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+    volumes:
+    - ./prometheus:/etc/prometheus
   payments:
     build: ./payments
     ports:
       - "8001:8000"
+      - "8012:8001"
+    volumes:
+      - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@payments_db/payments_db
+      - KAFKA_BROKER=kafka:9092
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=payments-service
     depends_on:
       - payments_db
+      - kafka
 
   payments_db:
     image: postgres:13
@@ -25,10 +47,22 @@ services:
     build: ./accounts
     ports:
       - "8002:8000"
+      - "8010:8001"
+    volumes:
+      - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@accounts_db/accounts_db
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=accounts-service
+      - KAFKA_BROKER=kafka:9092
+
     depends_on:
       - accounts_db
+      - kafka
 
   accounts_db:
     image: postgres:13
@@ -45,11 +79,21 @@ services:
     build: ./crm
     ports:
       - "8003:8000"
+      - "8013:8001"
+    volumes:
+      - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@crm_db/crm_db
+      - KAFKA_BROKER=kafka:9092
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=crm-service
     depends_on:
       - crm_db
-
+      - kafka
   crm_db:
     image: postgres:13
     environment:
@@ -65,10 +109,21 @@ services:
     build: ./delivery
     ports:
       - "8004:8000"
+      - "8014:8001"
+    volumes:
+      - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@delivery_db/delivery_db
+      - KAFKA_BROKER=kafka:9092
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=delivery-service
     depends_on:
       - delivery_db
+      - kafka
 
   delivery_db:
     image: postgres:13
@@ -80,9 +135,72 @@ services:
       - delivery_data:/var/lib/postgresql/data
     ports:
       - "5434:5432"
+  middleware:
+    build: ./middleware-refactor
+    ports:
+      - "8000:8000"
+      - "8011:8001"
+    environment:
+      - DATABASE_URL=postgresql://user:password@middleware_db/middlewaredb
+      - KAFKA_BROKER=kafka:9092
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+      - OTEL_LOGS_EXPORTER=otlp
+      - OTEL_SERVICE_NAME=middleware-service
+    depends_on:
+      - middleware_db
+      - kafka
+    command: >
+      sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
 
+  middleware_db:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: middlewaredb
+    volumes:
+      - middleware_data:/var/lib/postgresql/data
+    ports:
+      - "5437:5432"
+
+  kafka:
+    image: bitnamilegacy/kafka:3.5
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  zookeeper:
+    image: bitnamilegacy/zookeeper:latest
+    environment:
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    ports:
+      - "2181:2181"
+  
+  kafka-ui:
+    container_name: kafka-ui
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
 volumes:
   payments_data:
   accounts_data:
   crm_data:
   delivery_data:
+  middleware_data:
