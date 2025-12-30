@@ -22,7 +22,7 @@
 - [Tecnologias](#-tecnologias)
 - [Instalação e Execução](#-instalação-e-execução)
 - [Documentação](#-documentação)
-- [Manual de Integraçãoo](#-manual-integracao)
+- [Manual de Integraçãoo](#-manual-de-integração)
 - [Casos de Uso](#-casos-de-uso)
 - [Resultados](#-resultados)
 
@@ -274,7 +274,7 @@ curl http://localhost:8000/api/v1/privacy-requests/1
 
 ---
 
-## Manual de Integração
+## 💡 Manual de Integração
 
 Existe um [manual](./MANUAL_INTEGRACAO_NOVOS_SERVICOS.md), com checklist para integrar um novo serviço ao middleware. Usando esse passo a passo, vocrê ira conseguir integrar esse middleware em seu ecossistema.
 
