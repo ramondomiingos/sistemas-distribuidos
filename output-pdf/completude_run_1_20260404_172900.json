@@ -1,0 +1,17 @@
+{
+  "run": 1,
+  "timestamp_inicio": "2026-04-04 17:30:00",
+  "middleware": {
+    "total_submetido": 900,
+    "finished": 900,
+    "erros": 0,
+    "completude_pct": 100.0
+  },
+  "registros_restantes_por_servico": {
+    "accounts_users": 0,
+    "payments_orders": 0,
+    "crm_user_info": 0,
+    "delivery_deliveries": 0
+  },
+  "nota": "registros_restantes = 0 indica delecao 100% bem-sucedida no microsservico"
+}
