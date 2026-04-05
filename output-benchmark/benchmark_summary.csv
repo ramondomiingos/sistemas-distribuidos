@@ -1,0 +1,4 @@
+run,timestamp_inicio,total_submetido,total_finished,total_erro,completude_%,tempo_processamento_s
+1,2026-04-04 17:30:00,900,900,0,100.0281
+2,2026-04-04 17:36:42,900,900,0,100.0196
+3,2026-04-04 17:41:59,900,900,0,100.0201
