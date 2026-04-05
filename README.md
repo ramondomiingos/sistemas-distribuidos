@@ -8,9 +8,113 @@
 
 > **Dissertação de Mestrado**: Proposta de middleware automatizado para orquestração do direito ao esquecimento (LGPD Art. 18, VI) em arquiteturas de microsserviços distribuídos, utilizando o padrão Two-Phase Commit adaptado para comunicação assíncrona via Apache Kafka.
 
-**Autor**: Ramon Domingos  
+**Autor**: Ramon Domingos
 **Programa**: Mestrado em Tecnologia da Informação
-**Ano**: 2025
+**Instituição**: Universidade Federal do Rio Grande do Norte (UFRN)
+**Orientador**: Eiji Adachi
+**Ano**: 2026
+
+---
+
+## Resumo
+
+Este artefato acompanha o artigo **"Adaptação à LGPD: Middleware para Implementação do Direito ao Esquecimento em Sistemas Distribuídos"**. O artigo propõe e avalia um middleware que orquestra o direito ao esquecimento (Art. 18, VI da LGPD) em arquiteturas de microsserviços, utilizando uma adaptação do protocolo Two-Phase Commit (2PC) para comunicação assíncrona via Apache Kafka. O artefato inclui o código-fonte completo do middleware, quatro microsserviços de exemplo, uma biblioteca de integração reutilizável (`pacote_privacy`), scripts de benchmark automatizados e os resultados brutos dos experimentos que embasam as afirmações do artigo.
+
+---
+
+## Estrutura do README
+
+Este README está organizado da seguinte forma:
+
+- **[Selos Considerados](#selos-considerados)** — selos de avaliação do artefato
+- **[Informações Básicas](#informações-básicas)** — requisitos de hardware e software
+- **[Dependências](#dependências)** — versões de todas as dependências
+- **[Preocupações com Segurança](#preocupações-com-segurança)** — riscos e recomendações
+- **[Instalação](#-instalação-e-execução)** — clone, build e inicialização
+- **[Teste Mínimo](#teste-mínimo)** — verificação rápida da instalação
+- **[Experimentos](#experimentos)** — reprodução dos resultados do artigo
+- **[Visão Geral do Projeto](#-visão-geral)** — contexto acadêmico e arquitetura
+- **[Documentação Complementar](#-documentação)** — documentação acadêmica detalhada
+
+---
+
+## Selos Considerados
+
+Os selos considerados são: **Disponíveis** e **Funcionais**.
+
+- **Disponível**: o artefato está publicamente acessível no GitHub com licença MIT, incluindo código-fonte, scripts de experimento e dados brutos dos resultados.
+- **Funcional**: o artefato pode ser executado em ambiente local via Docker Compose, reproduzindo o comportamento descrito no artigo — incluindo o protocolo 2PC completo e a coleta de métricas de recursos.
+
+---
+
+## Informações Básicas
+
+### Ambiente de Execução
+
+| Recurso | Mínimo Recomendado |
+|---------|-------------------|
+| **CPU** | 4 núcleos (8 recomendado) |
+| **RAM** | 8 GB disponível |
+| **Disco** | 5 GB livres |
+| **SO** | Linux ou macOS (testado em macOS 14+, Ubuntu 22.04) |
+
+### Software Necessário
+
+| Software | Versão Mínima | Observação |
+|----------|--------------|------------|
+| Docker Engine | 24.x | |
+| Docker Compose | 2.x (plugin) | `docker compose version` |
+| Python | 3.9+ | Apenas para scripts de benchmark |
+| Git | qualquer | |
+| Bash | 3.2+ | Compatível com macOS bash padrão |
+
+### Portas Utilizadas
+
+As seguintes portas devem estar livres no host: `3000, 5001–5004, 5432–5437, 8000, 8080, 9090, 9092, 2181`.
+
+---
+
+## Dependências
+
+### Dependências dos Serviços (gerenciadas pelo Docker)
+
+Todas as dependências de runtime são instaladas automaticamente via `docker compose up --build`. As versões principais são:
+
+| Dependência | Versão | Uso |
+|-------------|--------|-----|
+| Python | 3.9 | Runtime de todos os serviços |
+| FastAPI | 0.100+ | Framework HTTP do middleware e microsserviços |
+| aiokafka | 0.8+ | Cliente Kafka assíncrono |
+| SQLAlchemy | 2.0+ | ORM PostgreSQL |
+| Apache Kafka | 3.5 | Message broker |
+| PostgreSQL | 13 | Banco de dados (5 instâncias independentes) |
+| OpenTelemetry | 1.x | Observabilidade distribuída |
+| Prometheus | 2.x | Coleta de métricas |
+| Grafana LGTM | 10.x | Visualização |
+
+### Dependências dos Scripts de Benchmark (host)
+
+```bash
+pip install psycopg2-binary faker requests
+```
+
+| Pacote | Uso |
+|--------|-----|
+| psycopg2-binary | Conexão direta com PostgreSQL para inserção de dados |
+| faker | Geração de dados sintéticos (nomes, emails) |
+| requests | Submissão das requisições HTTP ao middleware |
+
+### Acesso a Recursos de Terceiros
+
+Nenhum. O artefato é completamente auto-contido — todos os serviços (Kafka, PostgreSQL, Grafana, Prometheus) sobem via Docker Compose sem dependência de nuvem ou serviços externos.
+
+---
+
+## Preocupações com Segurança
+
+O artefato **não apresenta riscos de segurança** para os avaliadores. Todas as credenciais configuradas (usuário/senha de banco de dados, etc.) são padrões de desenvolvimento local (`user`/`password`) e os serviços ficam expostos apenas em `localhost`. Não há conexão com serviços externos nem armazenamento de dados reais.
+
+**Recomendação**: execute o artefato em uma máquina de desenvolvimento ou VM isolada, não em ambiente de produção.
 
 ---
 
@@ -22,10 +126,9 @@
 - [Tecnologias](#-tecnologias)
 - [Instalação e Execução](#-instalação-e-execução)
 - [Documentação](#-documentação)
-- [Manual de Integraçãoo](#-manual-de-integração)
+- [Manual de Integração](#-manual-de-integração)
 - [Casos de Uso](#-casos-de-uso)
 - [Resultados](#-resultados)
-
 
 ---
 
@@ -213,34 +316,199 @@ open http://localhost:3000
 # Login: admin / admin
 ```
 
-### Teste Rápido
+---
+
+## Teste Mínimo
+
+Este teste verifica que o protocolo 2PC está operacional de ponta a ponta.
 
 ```bash
-# Criar requisição de privacidade
-curl -X POST http://localhost:8000/api/v1/privacy-requests/ \
+# 1. Inserir dados de um titular de teste
+docker compose exec accounts_db psql -U user -d accounts_db -c \
+  "INSERT INTO users (name, email, account_id) VALUES ('Teste', 'teste@exemplo.com', 'test-account-001');"
+
+# 2. Submeter requisição de exclusão ao middleware
+curl -s -X POST http://localhost:8000/api/v1/privacy-requests/ \
   -H "Content-Type: application/json" \
-  -d '{
-    "account_id": "123456789",
-    "request_type": "DELETE",
-    "reason": "Solicitação do titular conforme LGPD Art. 18"
-  }'
+  -d '{"account_id": "test-account-001", "operation": "DELETE"}' | python3 -m json.tool
 
-# Resposta esperada:
-# {
-#   "id": 1,
-#   "account_id": "123456789",
-#   "request_type": "DELETE",
-#   "status": "PENDING",
-#   ...
-# }
+# Resposta esperada: {"id": "...", "status": "CREATED", ...}
+# Anote o "id" retornado.
 
-# Aguardar processamento (2-5 segundos)
-sleep 5
+# 3. Aguardar processamento (5–15 segundos)
+sleep 10
 
-# Consultar status
-curl http://localhost:8000/api/v1/privacy-requests/1
+# 4. Verificar status final (substitua <ID> pelo id retornado)
+curl -s http://localhost:8000/api/v1/privacy-requests/<ID> | python3 -m json.tool
+# Status esperado: "FINISHED"
 
-# Status esperado: "COMPLETED" ou "FAILED"
+# 5. Confirmar que o registro foi removido
+docker compose exec accounts_db psql -U user -d accounts_db -c \
+  "SELECT COUNT(*) FROM users WHERE account_id = 'test-account-001';"
+# Resultado esperado: 0
+```
+
+**Tempo esperado**: menos de 30 segundos após a inicialização completa dos serviços.
+
+---
+
+## Experimentos
+
+Esta seção descreve como reproduzir os dois resultados principais do artigo.
+
+**Pré-requisito**: instale as dependências Python do host antes de executar os experimentos:
+
+```bash
+pip install psycopg2-binary faker requests
+```
+
+---
+
+### Reivindicação 1 — Completude do Protocolo 2PC (100%)
+
+**Afirmação do artigo**: o middleware garante a execução integral do direito ao esquecimento — todas as 900 requisições percorrem as duas fases do protocolo (PREPARE\_DELETE e PERFORM\_DELETE) com sucesso, e os registros são removidos de todos os quatro microsserviços participantes.
+
+**Resultado esperado**: completude de 100% e 0 registros remanescentes em cada banco de dados.
+
+**Tempo estimado**: ~5 minutos por execução (inserção + processamento).
+
+**Recursos esperados**: pico de ~47% CPU no container do middleware, ~75 MiB RAM por container.
+
+**Passos**:
+
+```bash
+# 1. Certifique-se de que todos os containers estão em execução
+docker compose ps
+
+# 2. (Opcional) Limpe dados de execuções anteriores
+docker compose exec middleware_db psql -U user -d middlewaredb \
+  -c "DELETE FROM privacy_request_services; DELETE FROM privacy_requests;"
+
+# 3. Execute o script de inserção e exclusão (900 contas)
+python tools/bulk_insert_and_delete.py
+
+# Saída esperada:
+#   ✓ 900/900 contas inseridas
+#   Requisições submetidas: 900 | Erros: 0
+
+# 4. Aguarde o processamento (até 5 minutos)
+# O script abaixo monitora o progresso:
+python3 tools/check_completude.py \
+  --run 1 \
+  --account-ids tools/account_ids.json \
+  --output /tmp/completude_resultado.json \
+  --ts-inicio "$(date '+%Y-%m-%d %H:%M:%S')" \
+  --summary /tmp/summary.csv
+
+# 5. Verifique o resultado
+cat /tmp/completude_resultado.json
+```
+
+**Interpretação do resultado**:
+- `completude_pct: 100.0` — todas as requisições concluíram o protocolo 2PC
+- `registros_restantes_por_servico: {"accounts_users": 0, "payments_orders": 0, "crm_user_info": 0, "delivery_deliveries": 0}` — deleção completa em todos os microsserviços
+
+---
+
+### Reivindicação 2 — Eficiência de Recursos (Benchmark Completo)
+
+**Afirmação do artigo**: o middleware concentra o consumo de CPU durante o pico (~47%), com overhead residual no pós-processamento (~11%), enquanto o consumo de memória permanece estável e inferior a 75 MiB por container em todas as condições.
+
+**Resultado esperado**: séries temporais de CPU e memória com o padrão repouso → pico → recuperação descrito no artigo, com médias e desvios padrão reproduzindo os valores das tabelas.
+
+**Tempo estimado**: ~15–20 minutos por execução completa (3× ~5 min + intervalos). O benchmark completo (3 execuções) leva aproximadamente 60–70 minutos.
+
+**Recursos esperados**: pico de ~50% CPU total da máquina host durante a fase de carga.
+
+**Passos**:
+
+```bash
+# Executar benchmark completo (3 execuções independentes)
+bash tools/benchmark.sh
+
+# O script gera automaticamente em output-pdf/:
+#   benchmark_run_1_<timestamp>.csv  — série temporal de recursos (run 1)
+#   benchmark_run_2_<timestamp>.csv  — série temporal de recursos (run 2)
+#   benchmark_run_3_<timestamp>.csv  — série temporal de recursos (run 3)
+#   completude_run_1_<timestamp>.json — completude run 1
+#   completude_run_2_<timestamp>.json — completude run 2
+#   completude_run_3_<timestamp>.json — completude run 3
+#   benchmark_summary.csv            — resumo das 3 execuções
+```
+
+**Verificar resultados**:
+
+```bash
+# Resumo de completude
+cat output-pdf/benchmark_summary.csv
+
+# Calcular médias de CPU por fase (middleware)
+# Filtrar apenas o container do middleware, separar por fase:
+grep "middleware" output-pdf/benchmark_run_1_*.csv | \
+  awk -F',' '{gsub(/%/,"",$5); print $2, $5}' | \
+  sort | awk '{sum[$1]+=$2; cnt[$1]++} END {for(p in sum) print p, sum[p]/cnt[p]}'
+```
+
+**Interpretação**: a coluna `Fase` nos CSVs assume os valores `repouso`, `pico` e `pos`, permitindo comparação direta com as tabelas do artigo. Os valores de CPU do middleware devem estar próximos de 1,7% (repouso), 47,5% (pico) e 10,8% (pós), com desvio padrão < 3% entre execuções.
+
+---
+
+## 💡 Manual de Integração
+
+Existe um [manual](./MANUAL_INTEGRACAO_NOVOS_SERVICOS.md), com checklist para integrar um novo serviço ao middleware. Usando esse passo a passo, você irá conseguir integrar esse middleware em seu ecossistema.
+
+---
+
+## 💡 Casos de Uso
+
+### Caso 1: Exclusão Bem-Sucedida ✅
+
+**Cenário**: Titular solicita exclusão, todos os serviços aprovam.
+
+```bash
+# 1. Criar requisição
+POST /api/v1/privacy-requests/
+{
+  "account_id": "123456789",
+  "operation": "DELETE"
+}
+
+# 2. Resultado
+# Status: FINISHED
+# Dados removidos de:
+# - Accounts: 1 usuário
+# - Payments: 3 pedidos
+# - CRM: 1 registro sensível
+# - Delivery: 2 entregas
+```
+
+### Caso 2: Rejeição por Regra de Negócio ❌
+
+**Cenário**: Titular possui pagamento pendente.
+
+```bash
+# 1. Criar requisição
+POST /api/v1/privacy-requests/
+{
+  "account_id": "987654321",
+  "operation": "DELETE"
+}
+
+# 2. Resultado
+# Status: FAILED
+# Motivo: "Payments bloqueou: 1 pagamento com status 'pending'"
+# Ação: Titular deve resolver pendências financeiras
+```
+
+### Caso 3: Falha Parcial ⚠️
+
+**Cenário**: Validação aprovada, mas um serviço falha na execução.
+
+```bash
+# Status: PARTIALLY_COMPLETED
+# Dados removidos de: Accounts, Payments, CRM
+# Falha em: Delivery (erro de conexão)
+# Ação: Retry manual ou automático
 ```
 
 ---
@@ -270,66 +538,6 @@ curl http://localhost:8000/api/v1/privacy-requests/1
    - Casos de uso
    - Avaliação e resultados
    - Trabalhos futuros
-
-
----
-
-## 💡 Manual de Integração
-
-Existe um [manual](./MANUAL_INTEGRACAO_NOVOS_SERVICOS.md), com checklist para integrar um novo serviço ao middleware. Usando esse passo a passo, vocrê ira conseguir integrar esse middleware em seu ecossistema.
-
-
-## 💡 Casos de Uso
-
-### Caso 1: Exclusão Bem-Sucedida ✅
-
-**Cenário**: Titular solicita exclusão, todos os serviços aprovam.
-
-```bash
-# 1. Criar requisição
-POST /api/v1/privacy-requests/
-{
-  "account_id": "123456789",
-  "request_type": "DELETE"
-}
-
-# 2. Resultado
-# Status: COMPLETED
-# Dados removidos de:
-# - Accounts: 1 usuário
-# - Payments: 3 pedidos
-# - CRM: 1 registro sensível
-# - Delivery: 2 entregas
-```
-
-### Caso 2: Rejeição por Regra de Negócio ❌
-
-**Cenário**: Titular possui pagamento pendente.
-
-```bash
-# 1. Criar requisição
-POST /api/v1/privacy-requests/
-{
-  "account_id": "987654321",
-  "request_type": "DELETE"
-}
-
-# 2. Resultado
-# Status: FAILED
-# Motivo: "Payments bloqueou: 1 pagamento com status 'pending'"
-# Ação: Titular deve resolver pendências financeiras
-```
-
-### Caso 3: Falha Parcial ⚠️
-
-**Cenário**: Validação aprovada, mas um serviço falha na execução.
-
-```bash
-# Status: PARTIALLY_COMPLETED
-# Dados removidos de: Accounts, Payments, CRM
-# Falha em: Delivery (erro de conexão)
-# Ação: Retry manual ou automático
-```
 
 ---
 
@@ -364,21 +572,6 @@ POST /api/v1/privacy-requests/
 
 ---
 
-<!-- ## 📖 Publicações
-
-### Artigos Submetidos
-
-1. **DOMINGOS, R.** "Privacy-by-Design em Microsserviços: Framework para Direito ao Esquecimento". Simpósio Brasileiro de Bancos de Dados (SBBD), 2025. *(submetido)*
-
-2. **DOMINGOS, R.; [ORIENTADOR]**. "Two-Phase Commit Assíncrono para Exclusão Distribuída em Conformidade com LGPD". Journal of Internet Services and Applications (JISA), 2025. *(em preparação)*
-
-### Apresentações
-
-- **Workshop de Privacidade e Proteção de Dados**, [Instituição], Dez/2025
-- **Seminário de Pesquisa em Sistemas Distribuídos**, [Instituição], Nov/2025
-
---- -->
-
 ## 🤝 Contribuições
 
 Este é um projeto de pesquisa acadêmica. Contribuições são bem-vindas através de:
@@ -405,49 +598,73 @@ git push origin feature/minha-contribuicao
 
 ---
 
-
-
 ## 📞 Contato
 
-**Ramon Domingos**  
-📧 Email: ramon.domingos.098@ufrn.edu.br 
-🔗 LinkedIn: [linkedin.com/in/ramondomiingos](https://linkedin.com/in/ramondomiingos)  
+**Ramon Domingos**
+📧 Email: ramon.domingos.098@ufrn.edu.br
+🔗 LinkedIn: [linkedin.com/in/ramondomiingos](https://linkedin.com/in/ramondomiingos)
 🐙 GitHub: [@ramondomiingos](https://github.com/ramondomiingos)
 
-**Orientador**: Eiji Adachi  
-📧 Email: [orientador]@[instituicao].br
-
-**Instituição**: UNIVERSIDADE FEDERAL DO RIO GRANDO DO NORTE
-**Programa**: Mestrado profissional em Tecnologia da Informação  
+**Orientador**: Eiji Adachi
+**Instituição**: Universidade Federal do Rio Grande do Norte
+**Programa**: Mestrado Profissional em Tecnologia da Informação
 **Linha de Pesquisa**: Engenharia de Software
 
 ---
 
 ## 🙏 Agradecimentos
 
-- **[Orientador]** - Orientação e suporte acadêmico
-- **[Instituição]** - Infraestrutura e recursos
+- **Eiji Adachi** - Orientação e suporte acadêmico
+- **UFRN** - Infraestrutura e recursos
 - **Comunidade Open Source** - FastAPI, Kafka, PostgreSQL, OpenTelemetry
-
 
 ---
 
 ## 📚 Citação
 
 Se você utilizar este trabalho em sua pesquisa, por favor cite:
-#TODO
 
 ```bibtex
-@mastersthesis{domingos2025lgpd,
+@mastersthesis{domingos2026lgpd,
   author  = {Ramon Domingos},
-  title   = {Adaptação à LGPD: Proposta de Middleware para a Implementação 
+  title   = {Adaptação à LGPD: Proposta de Middleware para a Implementação
              do Direito ao Esquecimento em Sistemas Distribuídos},
-  school  = {UNIVERSIDADE FEDERAL DO RIO GRANDO DO NORTE},
+  school  = {Universidade Federal do Rio Grande do Norte},
   year    = {2026},
   type    = {Dissertação de Mestrado},
-  address = {[Natal, RN]},
+  address = {Natal, RN},
   month   = {Fevereiro}
 }
+```
+
+---
+
+## LICENSE
+
+Este projeto está licenciado sob a licença **MIT**.
+
+```
+MIT License
+
+Copyright (c) 2026 Ramon Domingos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ---
