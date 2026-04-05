@@ -38,6 +38,42 @@ SUMMARY_FILE="$OUTPUT_DIR/benchmark_summary.csv"
 echo "run,timestamp_inicio,total_submetido,total_finished,total_erro,completude_%,tempo_processamento_s" > "$SUMMARY_FILE"
 
 # ---------------------------------------------------------------------------
+# Função: garante que os 4 serviços estão cadastrados no middleware
+# ---------------------------------------------------------------------------
+seed_services() {
+    echo ""
+    echo "  [seed] Verificando serviços cadastrados no middleware..."
+
+    # Busca nomes já cadastrados
+    EXISTING=$(curl -s http://localhost:8000/api/v1/services/ | python3 -c \
+        "import sys,json; print('\n'.join(s['service_name'] for s in json.load(sys.stdin)))" 2>/dev/null || echo "")
+
+    NAMES=("account" "payment" "crm" "delivery")
+    DESCS=(
+        "Autentica e autoriza o acesso de usuários a recursos e funcionalidades do sistema. Gerencia informações de perfil de usuários, credenciais de acesso e controla permissões e papéis dentro da plataforma."
+        "Gerencia o fluxo de valor monetário entre entidades. Implementa protocolos de comunicação seguros para autorização, captura e reembolso de transações financeiras. Mantém registros de transações e integra-se com gateways de pagamento."
+        "Centraliza e organiza dados relacionados a interações com clientes. Permite o registro e acompanhamento de leads, oportunidades de venda, histórico de comunicação e atividades de marketing e suporte."
+        "Coordena a movimentação física de bens do ponto de origem ao destino. Envolve o gerenciamento de rotas, agendamento de coletas e entregas e rastreamento em tempo real da localização dos itens."
+    )
+    for i in 0 1 2 3; do
+        NAME="${NAMES[$i]}"
+        DESC="${DESCS[$i]}"
+        if echo "$EXISTING" | grep -qx "$NAME"; then
+            echo "    [seed] Serviço '${NAME}' já existe — ignorando"
+        else
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X POST http://localhost:8000/api/v1/services/ \
+                -H "Content-Type: application/json" \
+                -d "{\"service_name\": \"${NAME}\", \"description\": \"${DESC}\"}")
+            echo "    [seed] Serviço '${NAME}' cadastrado (HTTP ${HTTP_STATUS})"
+        fi
+    done
+    echo "  [seed] Serviços verificados."
+}
+
+seed_services
+
+# ---------------------------------------------------------------------------
 # Função: coleta docker stats em background para um arquivo CSV
 # Uso: start_stats_collection <output_csv>
 # Retorna o PID na variável STATS_PID

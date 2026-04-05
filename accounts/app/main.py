@@ -24,7 +24,7 @@ PRIVACY_VALIDATE_RESPONSE_TOPIC = "privacy-validate-response-topic"
 PRIVACY_EXECUTE_TOPIC = "privacy-execute-topic"
 PRIVACY_EXECUTE_RESPONSE_TOPIC = "privacy-execute-response-topic"
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, pool_size=20, max_overflow=40, pool_timeout=60, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

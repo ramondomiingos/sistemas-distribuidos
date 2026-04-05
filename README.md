@@ -40,10 +40,12 @@ Este README está organizado da seguinte forma:
 
 ## Selos Considerados
 
-Os selos considerados são: **Disponíveis** e **Funcionais**.
+Os selos considerados são: **Disponíveis**, **Funcionais**, **Sustentáveis** e **Experimentos Reprodutíveis**.
 
-- **Disponível**: o artefato está publicamente acessível no GitHub com licença MIT, incluindo código-fonte, scripts de experimento e dados brutos dos resultados.
-- **Funcional**: o artefato pode ser executado em ambiente local via Docker Compose, reproduzindo o comportamento descrito no artigo — incluindo o protocolo 2PC completo e a coleta de métricas de recursos.
+- **Disponível (SeloD)**: o artefato está publicamente acessível no GitHub com licença MIT, incluindo código-fonte completo, scripts de experimento e dados brutos dos resultados.
+- **Funcional (SeloF)**: o artefato pode ser executado em ambiente local via Docker Compose, reproduzindo o comportamento descrito no artigo — incluindo o protocolo 2PC completo e a coleta de métricas de recursos. O README apresenta lista de dependências com versões, descrição do ambiente, instruções de instalação e um exemplo de execução mínima.
+- **Sustentável (SeloS)**: o código está modularizado em componentes bem definidos (middleware, microsserviços, biblioteca `pacote_privacy`), acompanhado de documentação acadêmica detalhada (`DOCUMENTACAO_ACADEMICA*.md`), manual de integração (`MANUAL_INTEGRACAO_NOVOS_SERVICOS.md`) e seção de experimentos com reivindicações identificadas explicitamente no README.
+- **Reprodutível (SeloR)**: as principais reivindicações do artigo (completude 100% do protocolo 2PC e eficiência de recursos) podem ser reproduzidas por meio de scripts automatizados (`tools/benchmark.sh`, `tools/bulk_insert_and_delete.py`, `tools/check_completude.py`) que replicam integralmente a metodologia experimental descrita no artigo, incluindo as três execuções independentes com coleta de métricas em série temporal rotulada por fase.
 
 ---
 

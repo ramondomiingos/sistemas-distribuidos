@@ -64,7 +64,11 @@ class KafkaService:
                     bootstrap_servers=KAFKA_BROKER,
                     group_id=f"{KAFKA_GROUP_ID}-{topic}",
                     auto_offset_reset="earliest",
-                    enable_auto_commit=False  # Desabilita commit automático
+                    enable_auto_commit=False,
+                    max_poll_interval_ms=600000,   # 10 min — evita rebalance sob carga
+                    session_timeout_ms=30000,
+                    heartbeat_interval_ms=3000,
+                    max_poll_records=10,           # processa em lotes menores
                 )
                 await consumer.start()
                 self.consumers[topic] = consumer
