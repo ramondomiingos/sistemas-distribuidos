@@ -29,8 +29,10 @@ services:
       - OTEL_LOGS_EXPORTER=otlp
       - OTEL_SERVICE_NAME=payments-service
     depends_on:
-      - payments_db
-      - kafka
+      payments_db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
 
   payments_db:
     image: postgres:13
@@ -42,6 +44,11 @@ services:
       - payments_data:/var/lib/postgresql/data
     ports:
       - "5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d payments_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   accounts:
     build: ./accounts
@@ -59,10 +66,11 @@ services:
       - OTEL_LOGS_EXPORTER=otlp
       - OTEL_SERVICE_NAME=accounts-service
       - KAFKA_BROKER=kafka:9092
-
     depends_on:
-      - accounts_db
-      - kafka
+      accounts_db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
 
   accounts_db:
     image: postgres:13
@@ -74,6 +82,11 @@ services:
       - accounts_data:/var/lib/postgresql/data
     ports:
       - "5436:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d accounts_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   crm:
     build: ./crm
@@ -92,8 +105,11 @@ services:
       - OTEL_LOGS_EXPORTER=otlp
       - OTEL_SERVICE_NAME=crm-service
     depends_on:
-      - crm_db
-      - kafka
+      crm_db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
   crm_db:
     image: postgres:13
     environment:
@@ -104,6 +120,11 @@ services:
       - crm_data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d crm_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   delivery:
     build: ./delivery
@@ -122,8 +143,10 @@ services:
       - OTEL_LOGS_EXPORTER=otlp
       - OTEL_SERVICE_NAME=delivery-service
     depends_on:
-      - delivery_db
-      - kafka
+      delivery_db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
 
   delivery_db:
     image: postgres:13
@@ -135,6 +158,12 @@ services:
       - delivery_data:/var/lib/postgresql/data
     ports:
       - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d delivery_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   middleware:
     build: ./middleware-refactor
     ports:
@@ -150,8 +179,10 @@ services:
       - OTEL_LOGS_EXPORTER=otlp
       - OTEL_SERVICE_NAME=middleware-service
     depends_on:
-      - middleware_db
-      - kafka
+      middleware_db:
+        condition: service_healthy
+      kafka:
+        condition: service_started
     command: >
       sh -c "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000"
 
@@ -165,6 +196,11 @@ services:
       - middleware_data:/var/lib/postgresql/data
     ports:
       - "5437:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d middlewaredb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   kafka:
     image: bitnamilegacy/kafka:3.5

@@ -16,6 +16,16 @@
 
 set -eo pipefail
 
+# Garante execução a partir da raiz do repositório
+cd "$(dirname "$0")/.."
+
+# Detecta python3 ou python
+PYTHON=$(command -v python3 || command -v python)
+if [ -z "$PYTHON" ]; then
+    echo "ERRO: Python 3 não encontrado. Instale Python 3.9+ e tente novamente." >&2
+    exit 1
+fi
+
 REPOUSO_DURATION=60     # segundos de repouso antes do disparo
 POS_DURATION=120        # segundos de coleta após término do processamento
 TOTAL_RUNS=3
@@ -70,6 +80,23 @@ seed_services() {
     done
     echo "  [seed] Serviços verificados."
 }
+
+# ---------------------------------------------------------------------------
+# Aguarda o middleware ficar saudável antes de prosseguir
+# ---------------------------------------------------------------------------
+echo ""
+echo "  [init] Aguardando middleware ficar disponível..."
+ATTEMPTS=0
+until curl -s http://localhost:8000/health | grep -q "healthy" || [ "$ATTEMPTS" -ge 30 ]; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    echo "    tentativa ${ATTEMPTS}/30..."
+    sleep 5
+done
+if [ "$ATTEMPTS" -ge 30 ]; then
+    echo "ERRO: Middleware não respondeu após 150s. Verifique 'docker compose logs middleware'." >&2
+    exit 1
+fi
+echo "  [init] Middleware disponível."
 
 seed_services
 
@@ -154,7 +181,7 @@ for run in $(seq 1 $TOTAL_RUNS); do
     echo "  [pico] Iniciando insert+delete (900 contas)..."
     set_phase "pico"
     TS_INICIO_DB=$(date "+%Y-%m-%d %H:%M:%S")
-    python tools/bulk_insert_and_delete.py
+    $PYTHON tools/bulk_insert_and_delete.py
     echo "  [pico] Script Python concluído."
 
     # --- Fase pós-processamento ---
