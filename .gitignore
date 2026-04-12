@@ -11,3 +11,6 @@ __pycache__/
 *.egg-info/
 *.egg
 *.log
+tools/accounts_for_jmeter.csv
+CLAUDE.md
+tools/generate_report.py
