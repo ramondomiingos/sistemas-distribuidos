@@ -235,5 +235,12 @@ def bulk_delete(account_ids):
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--insert-only", action="store_true",
+                        help="Apenas insere contas; delecao fica a cargo do JMeter")
+    args = parser.parse_args()
+
     account_ids = bulk_insert(NUM_ACCOUNTS)
-    bulk_delete(account_ids)
+    if not args.insert_only:
+        bulk_delete(account_ids)

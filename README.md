@@ -9,9 +9,13 @@
 > **Dissertação de Mestrado**: Proposta de middleware automatizado para orquestração do direito ao esquecimento (LGPD Art. 18, VI) em arquiteturas de microsserviços distribuídos, utilizando o padrão Two-Phase Commit adaptado para comunicação assíncrona via Apache Kafka.
 
 **Autor**: Ramon Domingos
+
 **Programa**: Mestrado em Tecnologia da Informação
+
 **Instituição**: Universidade Federal do Rio Grande do Norte (UFRN)
+
 **Orientador**: Eiji Adachi
+
 **Ano**: 2026
 
 ---
@@ -32,6 +36,7 @@ Este README está organizado da seguinte forma:
 - **[Preocupações com Segurança](#preocupações-com-segurança)** — riscos e recomendações
 - **[Instalação](#-instalação-e-execução)** — clone, build e inicialização
 - **[Teste Mínimo](#teste-mínimo)** — verificação rápida da instalação
+- **[Metodologia do Benchmark](#metodologia-do-benchmark)** — design experimental, protocolo de testes e coleta de métricas
 - **[Experimentos](#experimentos)** — reprodução dos resultados do artigo
 - **[Visão Geral do Projeto](#-visão-geral)** — contexto acadêmico e arquitetura
 - **[Documentação Complementar](#-documentação)** — documentação acadêmica detalhada
@@ -42,10 +47,10 @@ Este README está organizado da seguinte forma:
 
 Os selos considerados são: **Disponíveis**, **Funcionais**, **Sustentáveis** e **Experimentos Reprodutíveis**.
 
-- **Disponível (SeloD)**: o artefato está publicamente acessível no GitHub com licença MIT, incluindo código-fonte completo, scripts de experimento e dados brutos dos resultados na pasta `/output-benchmark`.
+- **Disponível (SeloD)**: o artefato está publicamente acessível no GitHub com licença MIT, incluindo código-fonte completo, scripts de experimento e resultados brutos dos benchmarks na pasta `output-benchmark/`.
 - **Funcional (SeloF)**: o artefato pode ser executado em ambiente local via Docker Compose, reproduzindo o comportamento descrito no artigo — incluindo o protocolo 2PC completo e a coleta de métricas de recursos. O README apresenta lista de dependências com versões, descrição do ambiente, instruções de instalação e um exemplo de execução mínima.
 - **Sustentável (SeloS)**: o código está modularizado em componentes bem definidos (middleware, microsserviços, biblioteca `pacote_privacy`), acompanhado de documentação acadêmica detalhada (`DOCUMENTACAO_ACADEMICA*.md`), manual de integração (`MANUAL_INTEGRACAO_NOVOS_SERVICOS.md`) e seção de experimentos com reivindicações identificadas explicitamente no README.
-- **Reprodutível (SeloR)**: as principais reivindicações do artigo (completude 100% do protocolo 2PC e eficiência de recursos) podem ser reproduzidas por meio de scripts automatizados (`tools/benchmark.sh`, `tools/bulk_insert_and_delete.py`, `tools/check_completude.py`) que replicam integralmente a metodologia experimental descrita no artigo, incluindo as três execuções independentes com coleta de métricas em série temporal rotulada por fase.
+- **Reprodutível (SeloR)**: as principais reivindicações do artigo (completude 100% do protocolo 2PC e eficiência de recursos) podem ser reproduzidas por meio de scripts automatizados (`tools/benchmark.sh`, `tools/bulk_insert_and_delete.py`, `tools/check_completude.py`, `tools/analyze_results.py`) que replicam integralmente a metodologia experimental descrita no artigo, incluindo 10 execuções independentes com coleta de métricas em série temporal rotulada por fase (repouso/pico/pós), reinício dos containers de aplicação entre runs para garantir isolamento de estado, e análise estatística completa (média, mediana, percentis p90/p95/p99, IQR e intervalo de confiança 95% via bootstrap).
 
 ---
 
@@ -66,7 +71,8 @@ Os selos considerados são: **Disponíveis**, **Funcionais**, **Sustentáveis** 
 |----------|--------------|------------|
 | Docker Engine | 24.x | |
 | Docker Compose | 2.x (plugin) | `docker compose version` |
-| Python | 3.9+ | Apenas para scripts de benchmark |
+| Python | 3.9+ | Scripts de inserção e análise |
+| Apache JMeter | 5.6+ | Geração de carga concorrente |
 | Git | qualquer | |
 | Bash | 3.2+ | Compatível com macOS bash padrão |
 
@@ -96,15 +102,27 @@ Todas as dependências de runtime são instaladas automaticamente via `docker co
 
 ### Dependências dos Scripts de Benchmark (host)
 
+**Python:**
 ```bash
 pip install psycopg2-binary faker requests
 ```
 
 | Pacote | Uso |
 |--------|-----|
-| psycopg2-binary | Conexão direta com PostgreSQL para inserção de dados |
-| faker | Geração de dados sintéticos (nomes, emails) |
-| requests | Submissão das requisições HTTP ao middleware |
+| psycopg2-binary | Inserção direta nos bancos dos microsserviços via psycopg2 |
+| faker | Geração de dados sintéticos (nomes, e-mails, endereços) |
+| requests | Submissão individual de requisições HTTP (testes avulsos) |
+
+**Apache JMeter** (geração de carga concorrente no benchmark):
+```bash
+# macOS
+brew install jmeter
+
+# Linux — baixe em https://jmeter.apache.org/download_jmeter.cgi
+# e adicione o binário ao PATH
+```
+
+O JMeter é responsável por disparar as 900 requisições de exclusão de forma concorrente no benchmark. Ele lê os `account_ids` reais pré-inseridos de um CSV (`tools/accounts_for_jmeter.csv`) e submete um `POST /api/v1/privacy-requests/` por thread, com ramp-up configurável. O plano de teste está em `jmeter/benchmark_load.jmx`.
 
 ### Acesso a Recursos de Terceiros
 
@@ -271,7 +289,8 @@ Um middleware centralizador, utilizando padrão Two-Phase Commit adaptado para c
 - Docker 24.x ou superior
 - Docker Compose 2.x ou superior
 - 8 GB RAM disponível
-- Portas 3000, 5001-5004, 5432-5437, 8000, 9090, 9092 disponíveis
+- Portas 3000, 5001-5004, 5432-5437, 8000, 8080, 9090, 9092, 2181 disponíveis
+- Apache JMeter 5.6+ (`brew install jmeter` no macOS) — necessário apenas para o benchmark
 
 ### Instalação
 
@@ -354,104 +373,227 @@ docker compose exec accounts_db psql -U user -d accounts_db -c \
 
 ---
 
+## Metodologia do Benchmark
+
+Esta seção descreve o design experimental adotado para avaliação do middleware, incluindo protocolo de testes, geração de carga, coleta de métricas e critérios de independência entre execuções.
+
+### Visão Geral
+
+O benchmark é composto por dois experimentos executados em sequência pelo script `tools/benchmark.sh`:
+
+| Experimento | Configuração | Runs | Requisições/run | Total de requisições |
+|---|---|---|---|---|
+| Escalabilidade | 1, 2, 3 e 4 serviços | 20 por configuração (80 total) | 900 | 72.000 |
+| Benchmark principal | 4 serviços (fixo) | 20 | 900 | 18.000 |
+
+### Protocolo Avaliado
+
+Cada requisição de exclusão percorre o protocolo 2PC assíncrono sobre Kafka:
+
+1. **Fase de validação**: middleware publica em `privacy-validate-topic`; cada microsserviço responde em `privacy-validate-response-topic` com aprovação ou rejeição baseada em regras de negócio (ex.: Payments bloqueia se há pagamento pendente; Delivery bloqueia se há entrega em trânsito)
+2. **Fase de execução**: se todos aprovaram, middleware publica em `privacy-execute-topic`; cada microsserviço apaga os dados e confirma em `privacy-execute-response-topic`
+
+O status final de cada requisição é `FINISHED` (todos executaram com sucesso), `FAILED` (algum bloqueou ou erro ocorreu) ou `PARTIALLY_COMPLETED` (inconsistência entre serviços).
+
+### Estrutura de Cada Run
+
+Cada execução segue três fases instrumentadas:
+
+| Fase | Duração | Descrição |
+|---|---|---|
+| `repouso` | 60 s | Sistema ocioso — coleta baseline de recursos sem carga |
+| `pico` | variável | Inserção de 900 contas + submissão de 900 requisições de exclusão em paralelo |
+| `pos` | até 90 s | Espera ativa por polling no banco até todas as requisições atingirem status terminal |
+
+### Geração de Carga
+
+A fase `pico` de cada run é composta por três etapas em sequência:
+
+**1. Inserção de dados** — `tools/bulk_insert_and_delete.py --insert-only`
+
+Cria 900 contas com UUIDs gerados do zero via conexões psycopg2 diretas aos bancos dos microsserviços. Os IDs são persistidos em `tools/account_ids.json`. UUIDs frescos a cada run eliminam colisão entre execuções.
+
+**2. Geração do CSV** — `tools/gen_accounts_csv.py`
+
+Converte `account_ids.json` para `tools/accounts_for_jmeter.csv` (uma linha por `account_id`, com header). Este arquivo é a entrada do JMeter.
+
+**3. Submissão concorrente** — Apache JMeter (`jmeter/benchmark_load.jmx`)
+
+O JMeter dispara 900 threads com ramp-up de 30 segundos. Cada thread lê um `account_id` único do CSV via `CSVDataSet` (modo `shareMode.all` — fila compartilhada, sem repetição) e envia um `POST /api/v1/privacy-requests/`. As métricas de latência HTTP de submissão são salvas em arquivo `.jtl` por run.
+
+```
+tools/account_ids.json
+       ↓ gen_accounts_csv.py
+tools/accounts_for_jmeter.csv
+       ↓ JMeter (900 threads, ramp-up 30s)
+POST /api/v1/privacy-requests/  ×900 concorrentes
+       ↓
+Kafka → 2PC → FINISHED/FAILED
+```
+
+O JTL registra a **latência de submissão** (tempo de resposta do POST). A **latência de processamento 2PC** (do `CREATED` ao `FINISHED`) é medida separadamente via banco de dados (`created_at` → `updated_at`).
+
+### Experimento 1 — Escalabilidade (1 → 4 Serviços)
+
+Os serviços são adicionados **cumulativamente**: a configuração com N serviços mantém todos os N−1 anteriores ativos e registrados, acrescentando apenas o novo. Isso simula o crescimento incremental de um ambiente de produção e permite observar como o protocolo 2PC se comporta à medida que mais participantes entram no consenso.
+
+Para cada configuração (1, 2, 3 e 4 serviços), são realizados 20 runs independentes, totalizando 80 runs nesta parte.
+
+### Experimento 2 — Benchmark Principal (20 Runs, 4 Serviços)
+
+Com todos os quatro serviços ativos, são realizadas 20 execuções independentes para caracterizar o comportamento do sistema em condições de carga máxima com amostragem estatisticamente robusta.
+
+### Independência entre Runs
+
+A independência entre execuções é garantida por três mecanismos:
+
+- **UUIDs únicos por run**: nenhuma conta criada em run N colide com as de run N+1
+- **Reinício dos containers de aplicação** (`docker compose restart`) entre runs: zera estado em memória, reconecta consumers Kafka e reinicia connection pools
+- **Bancos de dados e Kafka preservados**: os dados acumulam entre runs, permitindo análise histórica completa ao final
+
+O banco do middleware é limpo **uma única vez** no início do benchmark, antes de qualquer experimento.
+
+### Coleta de Métricas
+
+**Métricas de recursos** — amostradas a cada 1 segundo via `docker stats` para todos os containers, durante todas as fases:
+- CPU %
+- Memória (MB e %)
+- Net IO acumulado (TX/RX em MB)
+- Block IO acumulado (leitura/escrita em MB)
+
+**Métricas de completude** — apuradas ao final de cada run via consulta direta ao banco do middleware, filtrando pelo timestamp UTC de início do run:
+- Total de requisições submetidas
+- Total com status `FINISHED`
+- Total com status `FAILED`
+- Percentual de completude
+- Tempo total de processamento (segundos)
+
+### Análise Estatística
+
+Ao final do benchmark, `tools/analyze_results.py` computa:
+
+- Média, desvio padrão, mediana, P25, P75, P90, P95, P99 e IQR
+- Intervalos de confiança 95% via bootstrap não-paramétrico (2.000 reamostras, seed=42) — não assume normalidade da distribuição
+- Coeficiente de Variação (CV = σ/μ × 100%) para comparar estabilidade entre métricas
+- Análise de escalabilidade: speedup, eficiência e fitting empírico da Lei de Amdahl
+- Correlação de Pearson entre CPU e latência (observacional)
+
+### Export do Banco de Dados
+
+Ao término, o banco completo é exportado para `output-benchmark/db_export/`:
+
+| Arquivo | Conteúdo |
+|---|---|
+| `privacy_requests.csv` | Todas as requisições com status e timestamps |
+| `privacy_requests_services.csv` | Detalhes de validação/execução por serviço |
+| `services.csv` | Serviços registrados |
+| `middlewaredb_dump.sql` | Dump SQL completo para restauração posterior |
+
+---
+
 ## Experimentos
 
-Esta seção descreve como reproduzir os dois resultados principais do artigo.
+Esta seção descreve como reproduzir os resultados do artigo.
 
-**Pré-requisito**: instale as dependências Python do host antes de executar os experimentos:
+**Pré-requisitos**:
 
 ```bash
+# Dependências Python
 pip install psycopg2-binary faker requests
+
+# Apache JMeter (geração de carga concorrente)
+brew install jmeter        # macOS
+# Linux: https://jmeter.apache.org/download_jmeter.cgi
 ```
 
 ---
 
-### Reivindicação 1 — Completude do Protocolo 2PC (100%)
+### Reivindicação 1 — Completude do Protocolo 2PC
 
-**Afirmação do artigo**: o middleware garante a execução integral do direito ao esquecimento — todas as 900 requisições percorrem as duas fases do protocolo (PREPARE\_DELETE e PERFORM\_DELETE) com sucesso, e os registros são removidos de todos os quatro microsserviços participantes.
+**Afirmação**: o middleware garante a execução integral do direito ao esquecimento — todas as 900 requisições percorrem as duas fases do protocolo com sucesso, e os registros são removidos de todos os microsserviços participantes.
 
 **Resultado esperado**: completude de 100% e 0 registros remanescentes em cada banco de dados.
-
-**Tempo estimado**: ~5 minutos por execução (inserção + processamento).
-
-**Recursos esperados**: pico de ~47% CPU no container do middleware, ~75 MiB RAM por container.
-
-**Passos**:
 
 ```bash
 # 1. Certifique-se de que todos os containers estão em execução
 docker compose ps
 
-# 2. (Opcional) Limpe dados de execuções anteriores
-docker compose exec middleware_db psql -U user -d middlewaredb \
-  -c "DELETE FROM privacy_request_services; DELETE FROM privacy_requests;"
+# 2. Insira 900 contas e gere o CSV para o JMeter
+python tools/bulk_insert_and_delete.py --insert-only
+python tools/gen_accounts_csv.py
 
-# 3. Execute o script de inserção e exclusão (900 contas)
-python tools/bulk_insert_and_delete.py
+# 3. Dispare 900 requisições concorrentes via JMeter
+jmeter -n \
+  -t jmeter/benchmark_load.jmx \
+  -JACCOUNTS_CSV="$(pwd)/tools/accounts_for_jmeter.csv" \
+  -JNUM_THREADS=900 -JRAMP_UP=30 \
+  -JRESULTS_JTL=/tmp/teste_completude.jtl \
+  -j /tmp/jmeter.log
 
-# Saída esperada:
-#   ✓ 900/900 contas inseridas
-#   Requisições submetidas: 900 | Erros: 0
-
-# 4. Aguarde o processamento (até 5 minutos)
-# O script abaixo monitora o progresso:
+# 4. Aguarde o processamento (até 5 minutos) e verifique
 python3 tools/check_completude.py \
   --run 1 \
   --account-ids tools/account_ids.json \
   --output /tmp/completude_resultado.json \
-  --ts-inicio "$(date '+%Y-%m-%d %H:%M:%S')" \
+  --ts-inicio "$(date -u '+%Y-%m-%d %H:%M:%S')" \
   --summary /tmp/summary.csv
 
-# 5. Verifique o resultado
 cat /tmp/completude_resultado.json
 ```
 
-**Interpretação do resultado**:
+**Interpretação**:
 - `completude_pct: 100.0` — todas as requisições concluíram o protocolo 2PC
-- `registros_restantes_por_servico: {"accounts_users": 0, "payments_orders": 0, "crm_user_info": 0, "delivery_deliveries": 0}` — deleção completa em todos os microsserviços
+- `registros_restantes_por_servico: {... 0 em todos}` — deleção completa em todos os microsserviços
 
 ---
 
-### Reivindicação 2 — Eficiência de Recursos (Benchmark Completo)
+### Reivindicação 2 — Comportamento sob Carga (Benchmark Completo)
 
-**Afirmação do artigo**: o middleware concentra o consumo de CPU durante o pico (~47%), com overhead residual no pós-processamento (~11%), enquanto o consumo de memória permanece estável e inferior a 75 MiB por container em todas as condições.
+**Afirmação**: o middleware apresenta consumo de CPU concentrado na fase de pico, com recuperação consistente na fase pós-carga, e consumo de memória estável ao longo das execuções.
 
-**Resultado esperado**: séries temporais de CPU e memória com o padrão repouso → pico → recuperação descrito no artigo, com médias e desvios padrão reproduzindo os valores das tabelas.
-
-**Tempo estimado**: ~15–20 minutos por execução completa (3× ~5 min + intervalos). O benchmark completo (3 execuções) leva aproximadamente 60–70 minutos.
-
-**Recursos esperados**: pico de ~50% CPU total da máquina host durante a fase de carga.
-
-**Passos**:
+**Tempo estimado**: o benchmark completo (80 runs de escalabilidade + 20 runs principais) leva aproximadamente **4–6 horas**.
 
 ```bash
-# A partir da raiz do repositório:
+# Executa o benchmark completo a partir da raiz do repositório
 bash tools/benchmark.sh
-
-# O script gera automaticamente em output-pdf/:
-#   benchmark_run_1_<timestamp>.csv  — série temporal de recursos (run 1)
-#   benchmark_run_2_<timestamp>.csv  — série temporal de recursos (run 2)
-#   benchmark_run_3_<timestamp>.csv  — série temporal de recursos (run 3)
-#   completude_run_1_<timestamp>.json — completude run 1
-#   completude_run_2_<timestamp>.json — completude run 2
-#   completude_run_3_<timestamp>.json — completude run 3
-#   benchmark_summary.csv            — resumo das 3 execuções
 ```
 
-**Verificar resultados**:
+**Saídas geradas em `output-benchmark/`**:
+
+```
+output-benchmark/
+├── scalability/
+│   ├── scalability_summary.csv           — resumo dos 80 runs de escalabilidade
+│   ├── run_Nsvcs_R_<ts>.csv              — série temporal de recursos por run
+│   └── run_Nsvcs_R_<ts>.jtl             — latências HTTP do JMeter por run
+├── benchmark_run_N_<ts>.csv             — série temporal de recursos (runs 1–20)
+├── benchmark_run_N_<ts>.jtl            — latências HTTP do JMeter (runs 1–20)
+├── completude_run_N_<ts>.json           — completude por run (runs 1–20)
+├── benchmark_summary.csv               — resumo tabular dos 20 runs principais
+├── benchmark_analysis.json             — estatísticas agregadas completas
+└── db_export/
+    ├── privacy_requests.csv
+    ├── privacy_requests_services.csv
+    ├── services.csv
+    └── middlewaredb_dump.sql
+```
+
+**Verificação rápida dos resultados**:
 
 ```bash
-# Resumo de completude
-cat output-pdf/benchmark_summary.csv
+# Resumo de completude por run
+cat output-benchmark/benchmark_summary.csv
 
-# Calcular médias de CPU por fase (middleware)
-# Filtrar apenas o container do middleware, separar por fase:
-grep "middleware" output-pdf/benchmark_run_1_*.csv | \
+# Estatísticas completas (média, mediana, percentis, IQR, IC 95% bootstrap)
+cat output-benchmark/benchmark_analysis.json
+
+# Médias de CPU do middleware por fase (run 1)
+grep "middleware" output-benchmark/benchmark_run_1_*.csv | \
   awk -F',' '{gsub(/%/,"",$5); print $2, $5}' | \
   sort | awk '{sum[$1]+=$2; cnt[$1]++} END {for(p in sum) print p, sum[p]/cnt[p]}'
 ```
 
-**Interpretação**: a coluna `Fase` nos CSVs assume os valores `repouso`, `pico` e `pos`, permitindo comparação direta com as tabelas do artigo. Os valores de CPU do middleware devem estar próximos de 1,7% (repouso), 47,5% (pico) e 10,8% (pós), com desvio padrão < 3% entre execuções.
+A coluna `Fase` nos CSVs assume os valores `repouso`, `pico` e `pos`, permitindo segmentação direta das métricas por momento do experimento. O arquivo `benchmark_analysis.json` reporta, por métrica: média ± desvio padrão, mediana (p50), IQR (p25–p75), p90, p95, p99 e intervalo de confiança 95% via bootstrap.
 
 ---
 
