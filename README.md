@@ -50,7 +50,7 @@ Os selos considerados são: **Disponíveis**, **Funcionais**, **Sustentáveis** 
 - **Disponível (SeloD)**: o artefato está publicamente acessível no GitHub com licença MIT, incluindo código-fonte completo, scripts de experimento e resultados brutos dos benchmarks na pasta `output-benchmark/`.
 - **Funcional (SeloF)**: o artefato pode ser executado em ambiente local via Docker Compose, reproduzindo o comportamento descrito no artigo — incluindo o protocolo 2PC completo e a coleta de métricas de recursos. O README apresenta lista de dependências com versões, descrição do ambiente, instruções de instalação e um exemplo de execução mínima.
 - **Sustentável (SeloS)**: o código está modularizado em componentes bem definidos (middleware, microsserviços, biblioteca `pacote_privacy`), acompanhado de documentação acadêmica detalhada (`DOCUMENTACAO_ACADEMICA*.md`), manual de integração (`MANUAL_INTEGRACAO_NOVOS_SERVICOS.md`) e seção de experimentos com reivindicações identificadas explicitamente no README.
-- **Reprodutível (SeloR)**: as principais reivindicações do artigo (completude 100% do protocolo 2PC e eficiência de recursos) podem ser reproduzidas por meio de scripts automatizados (`tools/benchmark.sh`, `tools/bulk_insert_and_delete.py`, `tools/check_completude.py`, `tools/analyze_results.py`) que replicam integralmente a metodologia experimental descrita no artigo, incluindo 10 execuções independentes com coleta de métricas em série temporal rotulada por fase (repouso/pico/pós), reinício dos containers de aplicação entre runs para garantir isolamento de estado, e análise estatística completa (média, mediana, percentis p90/p95/p99, IQR e intervalo de confiança 95% via bootstrap).
+- **Reprodutível (SeloR)**: as principais reivindicações do artigo (completude do protocolo 2PC e eficiência de recursos) podem ser reproduzidas por meio de scripts automatizados (`tools/benchmark.sh`, `tools/bulk_insert_and_delete.py`, `tools/check_completude.py`, `tools/analyze_results.py`) que replicam integralmente a metodologia experimental descrita no artigo, incluindo 80 execuções de escalabilidade (1→4 serviços, 20 runs cada) — das quais os 20 runs com n=4 servem também como benchmark principal — com coleta de métricas em série temporal rotulada por fase (repouso/pico/pós), reinício dos containers de aplicação entre runs para garantir isolamento de estado, e análise estatística completa (média, mediana, percentis p90/p95/p99, IQR e intervalo de confiança 95% via bootstrap).
 
 ---
 
@@ -78,7 +78,7 @@ Os selos considerados são: **Disponíveis**, **Funcionais**, **Sustentáveis** 
 
 ### Portas Utilizadas
 
-As seguintes portas devem estar livres no host: `3000, 5001–5004, 5432–5437, 8000, 8080, 9090, 9092, 2181`.
+As seguintes portas devem estar livres no host: `3000, 5432–5436, 8000–8004, 8010–8014, 8080, 9090, 9092, 2181`.
 
 ---
 
@@ -269,10 +269,10 @@ Um middleware centralizador, utilizando padrão Two-Phase Commit adaptado para c
 
 ```
 ├── Middleware (Port 8000)         - Orquestrador 2PC
-├── Accounts (Port 5001)           - Gestão de usuários
-├── Payments (Port 5002)           - Transações financeiras
-├── CRM (Port 5003)                - Dados sensíveis (LGPD Art. 5, II)
-├── Delivery (Port 5004)           - Logística e entregas
+├── Accounts (Port 8002)           - Gestão de usuários
+├── Payments (Port 8001)           - Transações financeiras
+├── CRM (Port 8003)                - Dados sensíveis (LGPD Art. 5, II)
+├── Delivery (Port 8004)           - Logística e entregas
 ├── Kafka (Port 9092)              - Message broker
 ├── Zookeeper (Port 2181)          - Coordenação Kafka
 ├── PostgreSQL (Ports 5432-5437)   - 5 bancos independentes
@@ -315,8 +315,10 @@ python tools/insert_values.py
 ```bash
 # 1. Verificar saúde dos serviços
 curl http://localhost:8000/health      # Middleware
-curl http://localhost:5001/health      # Accounts
-curl http://localhost:5002/health      # Payments
+curl http://localhost:8002/health      # Accounts
+curl http://localhost:8001/health      # Payments
+curl http://localhost:8003/health      # CRM
+curl http://localhost:8004/health      # Delivery
 
 # 2. Verificar Kafka consumers (deve mostrar 8 grupos)
 docker compose exec kafka kafka-consumer-groups.sh \
@@ -379,12 +381,12 @@ Esta seção descreve o design experimental adotado para avaliação do middlewa
 
 ### Visão Geral
 
-O benchmark é composto por dois experimentos executados em sequência pelo script `tools/benchmark.sh`:
+O benchmark é composto por um único experimento de escalabilidade executado pelo script `tools/benchmark.sh`. Os 20 runs da configuração com 4 serviços (n=4) servem simultaneamente como **benchmark principal**, eliminando redundância e contaminação de dados.
 
 | Experimento | Configuração | Runs | Requisições/run | Total de requisições |
 |---|---|---|---|---|
 | Escalabilidade | 1, 2, 3 e 4 serviços | 20 por configuração (80 total) | 900 | 72.000 |
-| Benchmark principal | 4 serviços (fixo) | 20 | 900 | 18.000 |
+| ↳ *n=4 também é o benchmark principal* | 4 serviços (fixo) | 20 (inclusos acima) | 900 | — |
 
 ### Protocolo Avaliado
 
@@ -403,7 +405,7 @@ Cada execução segue três fases instrumentadas:
 |---|---|---|
 | `repouso` | 60 s | Sistema ocioso — coleta baseline de recursos sem carga |
 | `pico` | variável | Inserção de 900 contas + submissão de 900 requisições de exclusão em paralelo |
-| `pos` | até 90 s | Espera ativa por polling no banco até todas as requisições atingirem status terminal |
+| `pos` | até 120 s | Espera ativa por polling no banco até todas as requisições atingirem status terminal (margem de 30 s acima do máximo 2PC de 90 s) |
 
 ### Geração de Carga
 
@@ -441,7 +443,7 @@ Para cada configuração (1, 2, 3 e 4 serviços), são realizados 20 runs indepe
 
 ### Experimento 2 — Benchmark Principal (20 Runs, 4 Serviços)
 
-Com todos os quatro serviços ativos, são realizadas 20 execuções independentes para caracterizar o comportamento do sistema em condições de carga máxima com amostragem estatisticamente robusta.
+Os 20 runs da última configuração de escalabilidade (n=4, todos os serviços ativos) são **também** os runs do benchmark principal. O script `benchmark.sh` coleta duplamente os artefatos para essa configuração: além do `scalability_summary.csv`, gera `benchmark_run_N_*.csv`, `completude_run_N_*.json`, `account_ids_run_N_*.json` e escreve no `benchmark_summary.csv`. Isso elimina a necessidade de uma fase separada, reduzindo o tempo total de ~4–6 h para **~2,5 h**.
 
 ### Independência entre Runs
 
@@ -522,7 +524,10 @@ docker compose ps
 python tools/bulk_insert_and_delete.py --insert-only
 python tools/gen_accounts_csv.py
 
-# 3. Dispare 900 requisições concorrentes via JMeter
+# 3. Marque o timestamp APÓS a inserção (mede apenas o tempo do protocolo 2PC)
+TS_INICIO=$(date -u '+%Y-%m-%d %H:%M:%S')
+
+# 4. Dispare 900 requisições concorrentes via JMeter
 jmeter -n \
   -t jmeter/benchmark_load.jmx \
   -JACCOUNTS_CSV="$(pwd)/tools/accounts_for_jmeter.csv" \
@@ -530,12 +535,12 @@ jmeter -n \
   -JRESULTS_JTL=/tmp/teste_completude.jtl \
   -j /tmp/jmeter.log
 
-# 4. Aguarde o processamento (até 5 minutos) e verifique
+# 5. Aguarde o processamento (até 2 minutos) e verifique
 python3 tools/check_completude.py \
   --run 1 \
   --account-ids tools/account_ids.json \
   --output /tmp/completude_resultado.json \
-  --ts-inicio "$(date -u '+%Y-%m-%d %H:%M:%S')" \
+  --ts-inicio "$TS_INICIO" \
   --summary /tmp/summary.csv
 
 cat /tmp/completude_resultado.json
@@ -551,7 +556,7 @@ cat /tmp/completude_resultado.json
 
 **Afirmação**: o middleware apresenta consumo de CPU concentrado na fase de pico, com recuperação consistente na fase pós-carga, e consumo de memória estável ao longo das execuções.
 
-**Tempo estimado**: o benchmark completo (80 runs de escalabilidade + 20 runs principais) leva aproximadamente **4–6 horas**.
+**Tempo estimado**: o benchmark completo (80 runs de escalabilidade, dos quais os 20 do n=4 também são o benchmark principal) leva aproximadamente **~2,5 horas**.
 
 ```bash
 # Executa o benchmark completo a partir da raiz do repositório
@@ -689,12 +694,17 @@ POST /api/v1/privacy-requests/
 
 ### Métricas de Performance
 
-| Métrica | Valor Médio | Desvio Padrão |
-|---------|-------------|---------------|
-| **Tempo de Validação** | 234ms | ±45ms |
-| **Tempo de Execução** | 567ms | ±120ms |
-| **Tempo Total (E2E)** | 801ms | ±165ms |
-| **Taxa de Sucesso** | 94.5% | - |
+> Os valores abaixo serão atualizados após a execução do benchmark completo (`bash tools/benchmark.sh`).
+> Os resultados definitivos ficam em `output-benchmark/benchmark_analysis.json` e `output-benchmark/estatisticas_consolidadas.csv`.
+
+| Métrica | Fonte | Limiar (RNF) |
+|---------|-------|--------------|
+| **Completude (% FINISHED)** | `benchmark_summary.csv` | ≥ 99,5% (RNF01) |
+| **Latência 2PC P95** | `db_export/privacy_requests.csv` | ≤ 10 s (RNF02) |
+| **Latência HTTP P99** | `*.jtl` (JMeter) | ≤ 500 ms (RNF03) |
+| **CPU middleware (pico, máx)** | `benchmark_run_N_*.csv` | ≤ 70% (RNF04) |
+| **Eficiência E(4)** | `scalability/scalability_summary.csv` | ≥ 70% (RNF05) |
+| **CV tempo de processamento** | `benchmark_summary.csv` | ≤ 15% (RNF07) |
 
 ### Garantias de Consistência
 

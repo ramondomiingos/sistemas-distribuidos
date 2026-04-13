@@ -41,6 +41,10 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title='accounts-service')
 configure_otel(app)
 
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
 
 logger = logging.getLogger("accounts")
 logger.setLevel(logging.INFO)  # Garante nível INFO

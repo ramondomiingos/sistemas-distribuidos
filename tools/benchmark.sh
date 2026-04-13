@@ -6,9 +6,11 @@
 # Ordem de execução:
 #   1. Limpeza inicial do banco (única vez)
 #   2. Experimento de escalabilidade: 1 → 2 → 3 → 4 serviços (20 runs cada = 80 total)
-#   3. Benchmark principal: 20 execuções independentes com 4 serviços
-#   4. Análise estatística (analyze_results.py)
-#   5. Export do banco de dados (CSV + dump SQL)
+#      → Os 20 runs com 4 serviços TAMBÉM servem como benchmark principal.
+#         Não há loop separado para o benchmark — os dados são coletados
+#         duplamente nessa fase (scalability_summary.csv + benchmark_summary.csv).
+#   3. Análise estatística (analyze_results.py)
+#   4. Export do banco de dados (CSV + dump SQL)
 #
 # Ao final, TODAS as requisições permanecem no banco para consultas posteriores.
 #
@@ -19,12 +21,12 @@
 #   - Bancos e Kafka NÃO são reiniciados entre runs
 #
 # Saída:
-#   output-benchmark/scalability/           — experimento de escalabilidade
-#   output-benchmark/benchmark_run_N_*.csv  — stats de recursos (10 runs)
-#   output-benchmark/completude_run_N_*.json
-#   output-benchmark/benchmark_summary.csv
-#   output-benchmark/benchmark_analysis.json
-#   output-benchmark/relatorio/             — LaTeX + CSVs
+#   output-benchmark/scalability/               — experimento de escalabilidade (80 runs)
+#   output-benchmark/benchmark_run_N_*.csv      — stats de recursos (20 runs do n=4)
+#   output-benchmark/completude_run_N_*.json    — completude por run (20 runs do n=4)
+#   output-benchmark/benchmark_summary.csv      — resumo dos 20 runs com 4 serviços
+#   output-benchmark/benchmark_analysis.json    — estatísticas agregadas
+#   output-benchmark/db_export/                 — CSV + dump SQL do banco ao final
 # =============================================================================
 
 set -eo pipefail
@@ -50,15 +52,14 @@ fi
 # ---------------------------------------------------------------------------
 REPOUSO_DURATION=60
 POS_WAIT_INITIAL=40
-POS_TIMEOUT=90
-TOTAL_RUNS=20
+POS_TIMEOUT=120   # 2PC max = 30s validate + 60s execute + 30s margem
 SCALE_RUNS=20
 OUTPUT_DIR="output-benchmark"
 SCALE_DIR="$OUTPUT_DIR/scalability"
 
 SCALE_SVC_NAMES=("account"   "payment"   "crm"   "delivery")
 SCALE_CONTAINERS=("accounts" "payments"  "crm"   "delivery")
-SCALE_PORTS=(5001 5002 5003 5004)
+SCALE_PORTS=(8002 8001 8003 8004)   # porta externa conforme docker-compose.yml
 SCALE_DESCS=(
     "Autentica e autoriza o acesso de usuários a recursos e funcionalidades do sistema."
     "Gerencia o fluxo de valor monetário entre entidades e integra-se com gateways de pagamento."
@@ -72,6 +73,22 @@ mkdir -p "$OUTPUT_DIR" "$SCALE_DIR"
 # Funções auxiliares
 # ---------------------------------------------------------------------------
 PHASE_FILE="/tmp/benchmark_phase_$$"
+ALL_STATS_PIDS=()   # Rastreia todos os PIDs de coleta para o trap
+
+# ---------------------------------------------------------------------------
+# Trap: mata todos os processos filhos de coleta ao sair (Ctrl+C, erro, etc.)
+# ---------------------------------------------------------------------------
+cleanup_on_exit() {
+    echo ""
+    echo "  [trap] Encerrando processos filhos de coleta de stats..."
+    for pid in "${ALL_STATS_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    [ -n "${STATS_PID:-}" ] && kill "$STATS_PID" 2>/dev/null || true
+    rm -f "$PHASE_FILE" 2>/dev/null || true
+    echo "  [trap] Processos encerrados."
+}
+trap cleanup_on_exit EXIT INT TERM
 
 start_stats_collection() {
     local output_csv="$1"
@@ -87,6 +104,7 @@ start_stats_collection() {
         done
     ) &
     STATS_PID=$!
+    ALL_STATS_PIDS+=("$STATS_PID")
 }
 
 set_phase() { echo "$1" > "$PHASE_FILE"; }
@@ -204,6 +222,10 @@ echo "========================================================"
 SCALE_SUMMARY="$SCALE_DIR/scalability_summary.csv"
 echo "n_servicos,servicos,run,timestamp_inicio,total_submetido,total_finished,total_erro,completude_%,tempo_processamento_s" > "$SCALE_SUMMARY"
 
+# Benchmark principal: os 20 runs do n=4 também geram estes arquivos
+SUMMARY_FILE="$OUTPUT_DIR/benchmark_summary.csv"
+echo "run,timestamp_inicio,total_submetido,total_finished,total_erro,completude_%,tempo_processamento_s" > "$SUMMARY_FILE"
+
 # Para todos os containers de serviço — sobe 1 a 1
 echo ""
 echo "  [scale] Parando containers de serviço..."
@@ -247,9 +269,9 @@ for n_svcs in 1 2 3 4; do
         sleep "$REPOUSO_DURATION"
 
         set_phase "pico"
-        TS_INICIO_DB=$(date -u "+%Y-%m-%d %H:%M:%S")
         $PYTHON tools/bulk_insert_and_delete.py --insert-only
         $PYTHON tools/gen_accounts_csv.py
+        TS_INICIO_DB=$(date -u "+%Y-%m-%d %H:%M:%S")
         JMETER_JTL="${STATS_CSV%.csv}.jtl"
         JMETER_LOG="/tmp/jmeter_$(date +%s).log"
         jmeter -n \
@@ -279,8 +301,19 @@ for n_svcs in 1 2 3 4; do
 from datetime import datetime
 print(int((datetime.strptime('$TS_FIM','%Y-%m-%d %H:%M:%S')-datetime.strptime('$TS_INICIO_DB','%Y-%m-%d %H:%M:%S')).total_seconds()))")
 
-        echo "${n_svcs},${ACTIVE_SVCS},${scale_run},${TS_INICIO_DB},${TOTAL_N},${FINISHED_N},${ERRORS_N},${COMP_N},${TEMPO_S}" >> "$SCALE_SUMMARY"
+        echo "${n_svcs},\"${ACTIVE_SVCS}\",${scale_run},${TS_INICIO_DB},${TOTAL_N},${FINISHED_N},${ERRORS_N},${COMP_N},${TEMPO_S}" >> "$SCALE_SUMMARY"
         echo "  [scale] ${n_svcs} svc(s) run ${scale_run}: ${FINISHED_N}/${TOTAL_N} FINISHED (${COMP_N}%) em ${TEMPO_S}s"
+
+        # n=4 também gera os artefatos do benchmark principal
+        if [ "$n_svcs" -eq 4 ]; then
+            BENCH_STATS_CSV="$OUTPUT_DIR/benchmark_run_${scale_run}_${TIMESTAMP_RUN}.csv"
+            COMPLETUDE_JSON="$OUTPUT_DIR/completude_run_${scale_run}_${TIMESTAMP_RUN}.json"
+            cp "$STATS_CSV" "$BENCH_STATS_CSV"
+            check_completude "$scale_run" "tools/account_ids.json" "$COMPLETUDE_JSON" "$TS_INICIO_DB" "$SUMMARY_FILE"
+            sed -i '' "\$s/,\$/,${TEMPO_S}/" "$SUMMARY_FILE"
+            cp tools/account_ids.json "${OUTPUT_DIR}/account_ids_run_${scale_run}_${TIMESTAMP_RUN}.json"
+            echo "  [bench] → benchmark_run_${scale_run}_${TIMESTAMP_RUN}.csv + completude + account_ids"
+        fi
 
         # Cleanup entre runs: reinicia containers ativos (sem tocar no banco)
         if [ "$scale_run" -lt "$SCALE_RUNS" ]; then
@@ -293,87 +326,6 @@ echo ""
 echo "  [scale] Experimento de escalabilidade concluído."
 echo "  Resultados em: $SCALE_DIR/"
 cat "$SCALE_SUMMARY"
-
-# ===========================================================================
-# PARTE 2 — BENCHMARK PRINCIPAL (10 execuções, 4 serviços)
-# ===========================================================================
-echo ""
-echo "========================================================"
-echo " PARTE 2: BENCHMARK PRINCIPAL (${TOTAL_RUNS} execuções × 4 serviços)"
-echo "========================================================"
-
-# Reinicia todos os containers para garantir estado limpo antes dos 10 runs
-# (4 serviços já estão registrados e containers já estão rodando)
-cleanup_containers middleware accounts payments crm delivery
-
-SUMMARY_FILE="$OUTPUT_DIR/benchmark_summary.csv"
-echo "run,timestamp_inicio,total_submetido,total_finished,total_erro,completude_%,tempo_processamento_s" > "$SUMMARY_FILE"
-
-for run in $(seq 1 $TOTAL_RUNS); do
-    TIMESTAMP_RUN=$(date "+%Y%m%d_%H%M%S")
-    STATS_CSV="$OUTPUT_DIR/benchmark_run_${run}_${TIMESTAMP_RUN}.csv"
-    COMPLETUDE_JSON="$OUTPUT_DIR/completude_run_${run}_${TIMESTAMP_RUN}.json"
-
-    echo ""
-    echo "========================================================"
-    echo " EXECUÇÃO $run / $TOTAL_RUNS  —  $(date '+%Y-%m-%d %H:%M:%S')"
-    echo "========================================================"
-
-    start_stats_collection "$STATS_CSV"
-    set_phase "repouso"
-    echo "  [repouso] ${REPOUSO_DURATION}s..."
-    sleep "$REPOUSO_DURATION"
-
-    set_phase "pico"
-    echo "  [pico] Inserindo 900 contas nos microsserviços..."
-    TS_INICIO_DB=$(date -u "+%Y-%m-%d %H:%M:%S")
-    $PYTHON tools/bulk_insert_and_delete.py --insert-only
-    $PYTHON tools/gen_accounts_csv.py
-    JMETER_JTL="${STATS_CSV%.csv}.jtl"
-    JMETER_LOG="/tmp/jmeter_$(date +%s).log"
-    echo "  [pico] Disparando 900 requisições concorrentes via JMeter (ramp-up 30s)..."
-    jmeter -n \
-        -t "$(pwd)/jmeter/benchmark_load.jmx" \
-        -JACCOUNTS_CSV="$(pwd)/tools/accounts_for_jmeter.csv" \
-        -JNUM_THREADS=900 \
-        -JRAMP_UP=30 \
-        -JRESULTS_JTL="$JMETER_JTL" \
-        -j "$JMETER_LOG" > /dev/null
-    grep -E "summary|WARN|ERR" "$JMETER_LOG" | tail -3 || true
-    echo "  [pico] JMeter concluído. JTL: $JMETER_JTL"
-
-    set_phase "pos"
-    echo "  [pos] Aguardando FINISHED (espera ativa, máx ${POS_TIMEOUT}s)..."
-    wait_finished "$TS_INICIO_DB"
-
-    stop_stats_collection
-    echo "  [stats] → $STATS_CSV"
-
-    check_completude "$run" "tools/account_ids.json" "$COMPLETUDE_JSON" "$TS_INICIO_DB" "$SUMMARY_FILE"
-
-    TS_FIM=$(date -u "+%Y-%m-%d %H:%M:%S")
-    TEMPO_S=$(python3 -c "
-from datetime import datetime
-t1 = datetime.strptime('$TS_INICIO_DB', '%Y-%m-%d %H:%M:%S')
-t2 = datetime.strptime('$TS_FIM', '%Y-%m-%d %H:%M:%S')
-print(int((t2-t1).total_seconds()))")
-    sed -i '' "\$s/,\$/,${TEMPO_S}/" "$SUMMARY_FILE"
-
-    ACCOUNT_IDS_COPY="${OUTPUT_DIR}/account_ids_run_${run}_${TIMESTAMP_RUN}.json"
-    cp tools/account_ids.json "$ACCOUNT_IDS_COPY"
-
-    echo "  Execução $run concluída. Stats: $STATS_CSV"
-
-    if [ "$run" -lt "$TOTAL_RUNS" ]; then
-        cleanup_containers middleware accounts payments crm delivery
-    fi
-done
-
-echo ""
-echo "========================================================"
-echo " BENCHMARK PRINCIPAL CONCLUÍDO — resumo: $SUMMARY_FILE"
-echo "========================================================"
-cat "$SUMMARY_FILE"
 
 # ===========================================================================
 # ANÁLISE ESTATÍSTICA
@@ -414,8 +366,10 @@ echo "  [export] middlewaredb_dump.sql"
 echo ""
 echo "========================================================"
 echo " BENCHMARK COMPLETO"
-echo " Relatório:  $OUTPUT_DIR/relatorio/main.tex"
-echo " DB export:  $DB_EXPORT_DIR/"
+echo " Escalabilidade: $SCALE_DIR/scalability_summary.csv"
+echo " Benchmark:      $SUMMARY_FILE"
+echo " Análise:        $OUTPUT_DIR/benchmark_analysis.json"
+echo " DB export:      $DB_EXPORT_DIR/"
 echo "   ├── privacy_requests.csv"
 echo "   ├── privacy_requests_services.csv"
 echo "   ├── services.csv"

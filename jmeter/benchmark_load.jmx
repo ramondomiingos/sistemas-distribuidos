@@ -119,13 +119,13 @@ Exemplo de uso:
           <stringProp name="HTTPSampler.response_timeout">30000</stringProp>
         </HTTPSamplerProxy>
         <hashTree>
-          <!-- Assertion: middleware deve retornar HTTP 201 Created -->
+          <!-- Assertion: middleware deve retornar HTTP 200 Created -->
           <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion"
-                             testname="HTTP 201 Created" enabled="true">
+                             testname="HTTP 200 Created" enabled="true">
             <collectionProp name="Asserion.test_strings">
-              <stringProp name="49586">201</stringProp>
+              <stringProp name="49586">200</stringProp>
             </collectionProp>
-            <stringProp name="Assertion.custom_message">Esperado HTTP 201 — middleware não está respondendo?</stringProp>
+            <stringProp name="Assertion.custom_message">Esperado HTTP 200 — middleware não está respondendo?</stringProp>
             <stringProp name="Assertion.test_field">Assertion.response_code</stringProp>
             <boolProp name="Assertion.assume_success">false</boolProp>
             <intProp name="Assertion.test_type">8</intProp>

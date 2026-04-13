@@ -19,21 +19,26 @@ def psql(container: str, db: str, query: str) -> str:
     return result.stdout.strip()
 
 
-def wait_finished(request_ids: list, timeout: int = 300) -> tuple:
-    """Aguarda até todas as requisições do run ficarem FINISHED."""
-    total = len(request_ids)
-    if total == 0:
-        return 0, 0
-    ids_sql = ", ".join(f"'{i}'" for i in request_ids)
+def wait_finished_by_ts(ts_inicio: str, timeout: int = 300) -> tuple:
+    """Aguarda até todas as requisições criadas após ts_inicio ficarem em estado final."""
     waited = 0
     finished = 0
+    total = 0
     while waited < timeout:
+        total = int(psql(
+            "middleware_db", "middlewaredb",
+            f"SELECT COUNT(*) FROM privacy_requests WHERE created_at >= '{ts_inicio}';"
+        ) or 0)
         finished = int(psql(
             "middleware_db", "middlewaredb",
-            f"SELECT COUNT(*) FROM privacy_requests WHERE status='FINISHED' AND id = ANY(ARRAY[{ids_sql}]::text[]);"
+            f"SELECT COUNT(*) FROM privacy_requests WHERE status='FINISHED' AND created_at >= '{ts_inicio}';"
         ) or 0)
-        print(f"    FINISHED={finished} / TOTAL={total} ({waited}s)")
-        if finished == total:
+        pending = int(psql(
+            "middleware_db", "middlewaredb",
+            f"SELECT COUNT(*) FROM privacy_requests WHERE status IN ('PENDING','PROCESSING') AND created_at >= '{ts_inicio}';"
+        ) or 0)
+        print(f"    FINISHED={finished} / TOTAL={total} / PENDING={pending} ({waited}s)")
+        if total > 0 and pending == 0:
             break
         time.sleep(5)
         waited += 5
@@ -61,10 +66,11 @@ def main():
     with open(args.account_ids) as f:
         data_ids = json.load(f)
     account_ids = data_ids.get("account_ids", [])
-    request_ids = [r for r in data_ids.get("deletion_requests", {}).get("request_ids", []) if r]
 
+    # Consulta diretamente pelo timestamp de início do run, sem depender de request_ids
+    # (compatível com o fluxo --insert-only + JMeter, onde os IDs não são salvos no JSON)
     print("  [completude] Aguardando processamento finalizar...")
-    finished, total = wait_finished(request_ids)
+    finished, total = wait_finished_by_ts(args.ts_inicio)
     errors = total - finished
     completude = round(finished / total * 100, 2) if total > 0 else 0.0
 
