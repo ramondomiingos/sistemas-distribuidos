@@ -51,7 +51,7 @@ fi
 # Configuração
 # ---------------------------------------------------------------------------
 REPOUSO_DURATION=60
-POS_WAIT_INITIAL=40
+POS_WAIT_INITIAL=15
 POS_TIMEOUT=120   # 2PC max = 30s validate + 60s execute + 30s margem
 SCALE_RUNS=20
 OUTPUT_DIR="output-benchmark"
@@ -60,6 +60,8 @@ SCALE_DIR="$OUTPUT_DIR/scalability"
 SCALE_SVC_NAMES=("account"   "payment"   "crm"   "delivery")
 SCALE_CONTAINERS=("accounts" "payments"  "crm"   "delivery")
 SCALE_PORTS=(8002 8001 8003 8004)   # porta externa conforme docker-compose.yml
+# Prefixo real dos consumer groups Kafka (deve bater com group_id em cada main.py)
+SCALE_KAFKA_GROUPS=("accounts"  "payment"   "crm"   "delivery")
 SCALE_DESCS=(
     "Autentica e autoriza o acesso de usuários a recursos e funcionalidades do sistema."
     "Gerencia o fluxo de valor monetário entre entidades e integra-se com gateways de pagamento."
@@ -135,7 +137,9 @@ wait_container_healthy() {
     until curl -s "http://localhost:${port}/health" | grep -q "healthy" || [ "$ATTEMPTS" -ge 24 ]; do
         ATTEMPTS=$((ATTEMPTS + 1)); sleep 5
     done
-    [ "$ATTEMPTS" -ge 24 ] && echo "  AVISO: ${label} não respondeu em 120s."
+    if [ "$ATTEMPTS" -ge 24 ]; then
+        echo "  AVISO: ${label} não respondeu em 120s."
+    fi
 }
 
 register_one_service() {
@@ -146,11 +150,73 @@ register_one_service() {
     echo "  [scale] '${name}' registrado."
 }
 
-# Reinicia apenas os containers indicados (não mexe no banco)
+# Aguarda os consumer groups Kafka do serviço terem um membro ativo com partition
+# assignment (evita auto_offset_reset="latest" pulando mensagens publicadas antes
+# do consumer completar o primeiro fetch e registrar seu offset).
+wait_kafka_consumers_ready() {
+    local kafka_prefix="$1"   # prefixo real do group_id (ex: "accounts", "payment")
+    local validate_group="${kafka_prefix}-validate-group"
+    local execute_group="${kafka_prefix}-execute-group"
+    local ATTEMPTS=0
+    echo "  [kafka] Aguardando consumers ativos: ${validate_group} / ${execute_group}..."
+    # Usa awk para verificar que a coluna CONSUMER-ID (col 7) não é "-".
+    # grep -q "." passa mesmo quando o grupo existe mas não tem membro ativo
+    # (o --describe retorna a linha com CONSUMER-ID="-"), então o awk é necessário.
+    until ( docker compose exec -T kafka kafka-consumer-groups.sh \
+                --bootstrap-server localhost:9092 \
+                --describe --group "${validate_group}" 2>/dev/null \
+              | awk 'NR>1 && $7 != "-" {found=1} END {exit !found}' ) && \
+          ( docker compose exec -T kafka kafka-consumer-groups.sh \
+                --bootstrap-server localhost:9092 \
+                --describe --group "${execute_group}" 2>/dev/null \
+              | awk 'NR>1 && $7 != "-" {found=1} END {exit !found}' ) || \
+          [ "$ATTEMPTS" -ge 24 ]; do
+        ATTEMPTS=$((ATTEMPTS + 1)); sleep 5
+    done
+    if [ "$ATTEMPTS" -ge 24 ]; then
+        echo "  AVISO: consumers de '${kafka_prefix}' não ficaram prontos em 120s."
+    else
+        echo "  [kafka] Consumers de '${kafka_prefix}' prontos (${ATTEMPTS} tentativas)."
+    fi
+}
+
+# Para, zera offsets Kafka e sobe os containers indicados (não mexe no banco).
+# Regra: consumer lag deve ser zerado (--to-latest) ANTES de subir qualquer
+# container consumidor, garantindo que o próximo run não processe mensagens
+# residuais de runs anteriores (especialmente se o run anterior não completou
+# 100% dentro do timeout e deixou mensagens sem commit).
 cleanup_containers() {
     local containers="$*"
-    echo "  [cleanup] Reiniciando: ${containers}..."
-    docker compose restart $containers
+    echo "  [cleanup] Parando: ${containers}..."
+    docker compose stop $containers
+
+    echo "  [cleanup] Zerando offsets Kafka dos serviços ativos..."
+    for i in $(seq 0 $((n_svcs-1))); do
+        local prefix="${SCALE_KAFKA_GROUPS[$i]}"
+        docker compose exec -T kafka kafka-consumer-groups.sh \
+            --bootstrap-server localhost:9092 \
+            --group "${prefix}-validate-group" \
+            --topic "privacy-validate-topic" \
+            --reset-offsets --to-latest --execute 2>/dev/null || true
+        docker compose exec -T kafka kafka-consumer-groups.sh \
+            --bootstrap-server localhost:9092 \
+            --group "${prefix}-execute-group" \
+            --topic "privacy-execute-topic" \
+            --reset-offsets --to-latest --execute 2>/dev/null || true
+    done
+    docker compose exec -T kafka kafka-consumer-groups.sh \
+        --bootstrap-server localhost:9092 \
+        --group "middleware-group-privacy-validate-response-topic" \
+        --topic "privacy-validate-response-topic" \
+        --reset-offsets --to-latest --execute 2>/dev/null || true
+    docker compose exec -T kafka kafka-consumer-groups.sh \
+        --bootstrap-server localhost:9092 \
+        --group "middleware-group-privacy-execute-response-topic" \
+        --topic "privacy-execute-response-topic" \
+        --reset-offsets --to-latest --execute 2>/dev/null || true
+
+    echo "  [cleanup] Subindo: ${containers}..."
+    docker compose start $containers
     wait_middleware_healthy 36
     echo "  [cleanup] Pronto."
 }
@@ -172,7 +238,7 @@ wait_finished() {
     while [ "$WAIT_ELAPSED" -lt "$POS_TIMEOUT" ]; do
         local PENDING
         PENDING=$(docker compose exec -T middleware_db psql -U user -d middlewaredb -t -A \
-            -c "SELECT COUNT(*) FROM privacy_requests WHERE status IN ('PENDING','PROCESSING') AND created_at >= '${ts_inicio}';" \
+            -c "SELECT COUNT(*) FROM privacy_requests WHERE status NOT IN ('FINISHED','FAILED') AND created_at >= '${ts_inicio}';" \
             2>/dev/null || echo "0")
         PENDING=$(echo "$PENDING" | tr -d '[:space:]')
         if [ "$PENDING" = "0" ]; then
@@ -210,6 +276,51 @@ docker compose exec -T middleware_db psql -U user -d middlewaredb -c "
 " > /dev/null
 echo "  [init] Banco limpo."
 
+# Reseta os offsets de TODOS os consumer groups para "latest".
+# Motivação: os tópicos acumulam mensagens de sessões anteriores.
+# O middleware tem lag de dezenas de milhares de mensagens antigas nos tópicos de
+# resposta, o que faz ele demorar minutos processando backlog histórico antes de
+# chegar nas mensagens do run atual → POS_TIMEOUT estoura → 0% completude.
+# Os serviços (crm, delivery) também acumulam lag nos tópicos de validate/execute.
+# O --reset-offsets exige que os consumers estejam PARADOS; por isso paramos o
+# middleware primeiro (os serviços já estão parados neste ponto).
+# Para TODOS os serviços e middleware antes do reset.
+# O --reset-offsets exige que NENHUM consumer esteja ativo no grupo.
+# Se o container estiver rodando com consumers, o reset é rejeitado pelo Kafka.
+echo "  [init] Parando todos os containers de serviço e middleware para reset limpo..."
+docker compose stop middleware accounts payments crm delivery
+
+echo "  [init] Resetando offsets dos consumer groups do middleware (response topics)..."
+docker compose exec -T kafka kafka-consumer-groups.sh \
+    --bootstrap-server localhost:9092 \
+    --group "middleware-group-privacy-validate-response-topic" \
+    --topic "privacy-validate-response-topic" \
+    --reset-offsets --to-latest --execute
+docker compose exec -T kafka kafka-consumer-groups.sh \
+    --bootstrap-server localhost:9092 \
+    --group "middleware-group-privacy-execute-response-topic" \
+    --topic "privacy-execute-response-topic" \
+    --reset-offsets --to-latest --execute
+
+echo "  [init] Resetando offsets dos consumer groups dos serviços (validate/execute topics)..."
+for svc_prefix in accounts payment crm delivery; do
+    docker compose exec -T kafka kafka-consumer-groups.sh \
+        --bootstrap-server localhost:9092 \
+        --group "${svc_prefix}-validate-group" \
+        --topic "privacy-validate-topic" \
+        --reset-offsets --to-latest --execute 2>/dev/null || true
+    docker compose exec -T kafka kafka-consumer-groups.sh \
+        --bootstrap-server localhost:9092 \
+        --group "${svc_prefix}-execute-group" \
+        --topic "privacy-execute-topic" \
+        --reset-offsets --to-latest --execute 2>/dev/null || true
+done
+
+echo "  [init] Reiniciando middleware após reset..."
+docker compose start middleware
+wait_middleware_healthy 36
+echo "  [init] Offsets resetados e middleware pronto."
+
 # ===========================================================================
 # PARTE 1 — EXPERIMENTO DE ESCALABILIDADE (1 → 4 serviços)
 # ===========================================================================
@@ -226,24 +337,41 @@ echo "n_servicos,servicos,run,timestamp_inicio,total_submetido,total_finished,to
 SUMMARY_FILE="$OUTPUT_DIR/benchmark_summary.csv"
 echo "run,timestamp_inicio,total_submetido,total_finished,total_erro,completude_%,tempo_processamento_s" > "$SUMMARY_FILE"
 
-# Para todos os containers de serviço — sobe 1 a 1
+# Serviços já estão parados (foram parados acima junto com o middleware para o reset)
 echo ""
-echo "  [scale] Parando containers de serviço..."
-docker compose stop accounts payments crm delivery
+echo "  [scale] Containers de serviço já parados (parados na fase de reset)."
 
 for n_svcs in 1 2 3 4; do
     NEW_CONTAINER="${SCALE_CONTAINERS[$((n_svcs-1))]}"
     NEW_PORT="${SCALE_PORTS[$((n_svcs-1))]}"
     NEW_NAME="${SCALE_SVC_NAMES[$((n_svcs-1))]}"
     NEW_DESC="${SCALE_DESCS[$((n_svcs-1))]}"
+    NEW_KAFKA_PREFIX="${SCALE_KAFKA_GROUPS[$((n_svcs-1))]}"
 
     echo ""
     echo "  [scale] Subindo: ${NEW_CONTAINER}..."
+    # Zera o lag do novo serviço ANTES de iniciá-lo.
+    # Container está parado → reset aceito pelo Kafka.
+    # Sem isso, o serviço processa mensagens acumuladas de runs anteriores
+    # (n_svcs < atual) antes de chegar nas do run atual.
+    docker compose exec -T kafka kafka-consumer-groups.sh \
+        --bootstrap-server localhost:9092 \
+        --group "${NEW_KAFKA_PREFIX}-validate-group" \
+        --topic "privacy-validate-topic" \
+        --reset-offsets --to-latest --execute 2>/dev/null || true
+    docker compose exec -T kafka kafka-consumer-groups.sh \
+        --bootstrap-server localhost:9092 \
+        --group "${NEW_KAFKA_PREFIX}-execute-group" \
+        --topic "privacy-execute-topic" \
+        --reset-offsets --to-latest --execute 2>/dev/null || true
     docker compose start "$NEW_CONTAINER"
     wait_container_healthy "$NEW_PORT" "$NEW_CONTAINER"
 
     # Registra apenas o novo serviço (os anteriores já estão registrados)
     register_one_service "$NEW_NAME" "$NEW_DESC"
+
+    # Aguarda consumer groups Kafka do novo serviço
+    wait_kafka_consumers_ready "$NEW_KAFKA_PREFIX"
 
     # Lista acumulada de serviços e containers ativos
     ACTIVE_SVCS=""
@@ -278,7 +406,7 @@ for n_svcs in 1 2 3 4; do
             -t "$(pwd)/jmeter/benchmark_load.jmx" \
             -JACCOUNTS_CSV="$(pwd)/tools/accounts_for_jmeter.csv" \
             -JNUM_THREADS=900 \
-            -JRAMP_UP=30 \
+            -JRAMP_UP=15 \
             -JRESULTS_JTL="$JMETER_JTL" \
             -j "$JMETER_LOG" > /dev/null
         grep -E "summary|WARN|ERR" "$JMETER_LOG" | tail -3 || true
@@ -318,6 +446,12 @@ print(int((datetime.strptime('$TS_FIM','%Y-%m-%d %H:%M:%S')-datetime.strptime('$
         # Cleanup entre runs: reinicia containers ativos (sem tocar no banco)
         if [ "$scale_run" -lt "$SCALE_RUNS" ]; then
             cleanup_containers $ACTIVE_CONTAINERS
+            # Após restart, aguarda consumers Kafka de cada serviço ativo
+            # (o --describe retorna CONSUMER-ID="-" quando o grupo existe mas não
+            # tem membro ativo; a função wait_kafka_consumers_ready com awk detecta isso)
+            for i in $(seq 0 $((n_svcs-1))); do
+                wait_kafka_consumers_ready "${SCALE_KAFKA_GROUPS[$i]}"
+            done
         fi
     done
 done
