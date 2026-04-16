@@ -2,7 +2,7 @@
 from .telemetry import configure_otel
 from typing import Optional
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
@@ -34,7 +34,7 @@ class Delivery(Base):
     tracking_code = Column(String)
     estimated_delivery = Column(DateTime)
     carrier = Column(String)
-    customer_id = Column(String)
+    customer_id = Column(String, index=True)
     shipping_address = Column(String)
 
 Base.metadata.create_all(bind=engine)
@@ -144,9 +144,7 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
             return True, "Nenhuma entrega para deletar"
         
         deleted_count = len(deliveries)
-        for delivery in deliveries:
-            db.delete(delivery)
-        
+        db.query(Delivery).filter(Delivery.customer_id == txt["account_id"]).delete(synchronize_session=False)
         db.commit()
         logger.info(f"[Execute Handler] {deleted_count} entregas deletadas para customer_id: {txt['account_id']}")
         return True, f"{deleted_count} entregas deletadas com sucesso"
@@ -160,6 +158,12 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
 
 @app.on_event("startup")
 async def startup_event():
+    with engine.connect() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_deliveries_customer_id ON deliveries(customer_id)"
+        ))
+        conn.commit()
+
     global kafka_wrapper
     consumers_config = {
         "validator": {

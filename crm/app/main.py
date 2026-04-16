@@ -119,16 +119,13 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     
     db = SessionLocal()
     try:
-        # Busca e deleta informações do usuário
-        user_info = db.query(UserInfo).filter(UserInfo.account_id == txt["account_id"]).first()
-        
-        if not user_info:
+        deleted = db.query(UserInfo).filter(UserInfo.account_id == txt["account_id"]).delete(synchronize_session=False)
+        db.commit()
+
+        if deleted == 0:
             logger.info(f"[Execute Handler] Nenhuma informação CRM encontrada para deletar: {txt['account_id']}")
             return True, "Nenhuma informação CRM para deletar"
-        
-        db.delete(user_info)
-        db.commit()
-        
+
         logger.info(f"[Execute Handler] Informações CRM deletadas para account_id: {txt['account_id']}")
         return True, "Informações CRM deletadas com sucesso"
         

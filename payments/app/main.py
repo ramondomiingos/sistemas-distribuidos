@@ -2,7 +2,7 @@
 from .telemetry import configure_otel
 from typing import Optional
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
@@ -36,7 +36,7 @@ class Order(Base):
     payment_method = Column(String)
     transaction_id = Column(String)
     payment_date = Column(DateTime)
-    account_id = Column(String)
+    account_id = Column(String, index=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -146,9 +146,7 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
             return True, "Nenhum pedido para deletar"
         
         deleted_count = len(orders)
-        for order in orders:
-            db.delete(order)
-        
+        db.query(Order).filter(Order.account_id == txt["account_id"]).delete(synchronize_session=False)
         db.commit()
         logger.info(f"[Execute Handler] {deleted_count} pedidos deletados para account_id: {txt['account_id']}")
         return True, f"{deleted_count} pedidos deletados com sucesso"
@@ -162,6 +160,12 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
 
 @app.on_event("startup")
 async def startup_event():
+    with engine.connect() as conn:
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_orders_account_id ON orders(account_id)"
+        ))
+        conn.commit()
+
     global kafka_wrapper
     consumers_config = {
         "validator": {

@@ -47,8 +47,9 @@ class KafkaService:
             # Inicializa o produtor
             self.producer = aiokafka.AIOKafkaProducer(
                 bootstrap_servers=KAFKA_BROKER,
-                enable_idempotence=True,  # Garante entrega única
-                acks='all'  # Aguarda confirmação de todos os brokers
+                acks='1',
+                max_batch_size=65536,
+                linger_ms=5,
             )
             await self.producer.start()
 

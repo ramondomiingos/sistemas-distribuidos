@@ -15,8 +15,8 @@ class PrivacyRequestService(Base):
     __tablename__ = "privacy_requests_services"
 
     id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
-    privacy_request_id = Column(String, ForeignKey("privacy_requests.id"))
-    service_id = Column(String, ForeignKey("services.id"))
+    privacy_request_id = Column(String, ForeignKey("privacy_requests.id"), index=True)
+    service_id = Column(String, ForeignKey("services.id"), index=True)
     service_name = Column(String, nullable=False)
     status = Column(String, nullable=False)
     operation = Column(String, nullable=False)

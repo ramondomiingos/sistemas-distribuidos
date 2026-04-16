@@ -33,11 +33,10 @@ class KafkaProducer:
         try:
             self._producer = AIOKafkaProducer(
                 bootstrap_servers=KAFKA_BROKER,
-                enable_idempotence=True,
-                acks='all',
+                acks='1',
                 compression_type='gzip',
-                max_batch_size=16384,
-                linger_ms=100
+                max_batch_size=65536,
+                linger_ms=5
             )
             await self._producer.start()
             self._running = True
