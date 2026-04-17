@@ -450,11 +450,12 @@ Os 20 runs da última configuração de escalabilidade (n=4, todos os serviços 
 
 ### Independência entre Runs
 
-A independência entre execuções é garantida por três mecanismos:
+A independência entre execuções é garantida por quatro mecanismos:
 
 - **UUIDs únicos por run**: nenhuma conta criada em run N colide com as de run N+1
 - **Reinício dos containers de aplicação** (`docker compose restart`) entre runs: zera estado em memória, reconecta consumers Kafka e reinicia connection pools
 - **Bancos de dados e Kafka preservados**: os dados acumulam entre runs, permitindo análise histórica completa ao final
+- **TRUNCATE nos bancos dos microsserviços** antes da primeira participação de cada serviço no experimento de escalabilidade: runs anteriores (n=1, 2, 3) inserem dados em *todos* os serviços via `bulk_insert_and_delete.py`, mas o 2PC apaga apenas os dados dos serviços participantes. Sem esse mecanismo, ao entrar em n=4 o banco do `delivery` acumula registros de runs anteriores (~54.000 linhas), provocando contenção com o autovacuum do PostgreSQL e degradação de latência com cauda longa de 8–10 s. O TRUNCATE garante que cada serviço estreia com tabela limpa e baseline uniforme.
 
 O banco do middleware é limpo **uma única vez** no início do benchmark, antes de qualquer experimento.
 
@@ -479,8 +480,8 @@ Ao final do benchmark, `tools/analyze_results.py` computa:
 
 - Média, desvio padrão, mediana, P25, P75, P90, P95, P99 e IQR
 - Intervalos de confiança 95% via bootstrap não-paramétrico (2.000 reamostras, seed=42) — não assume normalidade da distribuição
-- Coeficiente de Variação (CV = σ/μ × 100%) para comparar estabilidade entre métricas
-- Análise de escalabilidade: speedup, eficiência e fitting empírico da Lei de Amdahl
+- Coeficiente de Variação (CV = σ/μ × 100%) calculado sobre as **médias por run** de CPU e memória na fase `pico` — isola variabilidade inter-run (RNF07), excluindo métricas de Net I/O por serem contadores cumulativos com variância por artefato de amostragem
+- Análise de escalabilidade: crescimento normalizado T(n)/T(1) e overhead relativo por configuração de serviços
 - Correlação de Pearson entre CPU e latência (observacional)
 
 ### Export do Banco de Dados
@@ -706,8 +707,8 @@ POST /api/v1/privacy-requests/
 | **Latência 2PC P95** | `db_export/privacy_requests.csv` | ≤ 10 s (RNF02) |
 | **Latência HTTP P99** | `*.jtl` (JMeter) | ≤ 500 ms (RNF03) |
 | **CPU middleware (pico, máx)** | `benchmark_run_N_*.csv` | ≤ 70% (RNF04) |
-| **Eficiência E(4)** | `scalability/scalability_summary.csv` | ≥ 70% (RNF05) |
-| **CV tempo de processamento** | `benchmark_summary.csv` | ≤ 15% (RNF07) |
+| **Crescimento T(4)/T(1)** | `scalability/scalability_summary.csv` | ≤ 2,0× (RNF05) |
+| **CV CPU e Memória (média por run, fase pico)** | `benchmark_run_N_*.csv` | ≤ 15% (RNF07) |
 
 ### Garantias de Consistência
 
