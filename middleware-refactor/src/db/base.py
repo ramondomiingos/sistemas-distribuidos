@@ -9,9 +9,8 @@ engine = create_engine(
     pool_size=30,
     max_overflow=70,
     pool_timeout=60,
-    pool_pre_ping=True,
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
 Base = declarative_base()
 
 # Dependency

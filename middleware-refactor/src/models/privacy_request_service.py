@@ -1,5 +1,5 @@
 # src/models/privacy_request_service.py
-from sqlalchemy import Column, String, DateTime, ForeignKey, func
+from sqlalchemy import Column, String, DateTime, ForeignKey, Index, func
 from sqlalchemy.orm import relationship
 from src.db.base import Base
 from enum import Enum
@@ -21,8 +21,12 @@ class PrivacyRequestService(Base):
     status = Column(String, nullable=False)
     operation = Column(String, nullable=False)
     description = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now(), nullable=True)
+
+    __table_args__ = (
+        Index('ix_prs_request_id_operation', 'privacy_request_id', 'operation'),
+    )
 
     # RELACIONAMENTO CORRETO
     privacy_request = relationship("PrivacyRequest", back_populates="services")

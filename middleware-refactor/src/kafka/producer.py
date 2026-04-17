@@ -33,7 +33,7 @@ class KafkaProducer:
         try:
             self._producer = AIOKafkaProducer(
                 bootstrap_servers=KAFKA_BROKER,
-                acks='1',
+                acks=1,
                 compression_type='gzip',
                 max_batch_size=65536,
                 linger_ms=5

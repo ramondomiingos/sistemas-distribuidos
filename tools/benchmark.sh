@@ -50,9 +50,11 @@ fi
 # ---------------------------------------------------------------------------
 # Configuração
 # ---------------------------------------------------------------------------
-REPOUSO_DURATION=60
-POS_WAIT_INITIAL=15
-POS_TIMEOUT=120   # 2PC max = 30s validate + 60s execute + 30s margem
+REPOUSO_DURATION=30   # baseline stats antes da carga (repouso) e cooldown após (pos)
+POS_WAIT_INITIAL=5    # espera inicial antes de começar a checar: 2PC ~1s com índices
+POS_TIMEOUT=60        # timeout máximo: 30s validate + 30s margem (índices eliminam
+                      # a degradação de DB que forçou 180s; budget real do protocolo
+                      # é 30s validate + 60s execute = 90s, mas na prática <2s)
 SCALE_RUNS=20
 OUTPUT_DIR="output-benchmark"
 SCALE_DIR="$OUTPUT_DIR/scalability"
@@ -348,6 +350,26 @@ for n_svcs in 1 2 3 4; do
     NEW_DESC="${SCALE_DESCS[$((n_svcs-1))]}"
     NEW_KAFKA_PREFIX="${SCALE_KAFKA_GROUPS[$((n_svcs-1))]}"
 
+    # Antes de subir cada serviço pela primeira vez, limpa os dados acumulados
+    # por runs anteriores onde esse serviço NÃO era participante.
+    # Motivação: runs n=1,2,3 inserem dados em TODOS os serviços (accounts, payments,
+    # crm, delivery) via bulk_insert_and_delete.py, mas o 2PC só apaga os dados dos
+    # serviços participantes. Ao entrar em n=4, o delivery_db acumula 54k+ registros
+    # de runs anteriores → tabela grande → autovacuum concorrente → long tail 8-10s.
+    # O TRUNCATE garante que cada serviço estreia com tabela limpa e baseline uniforme.
+    case "$NEW_CONTAINER" in
+        accounts)  _CLEAN_DB="accounts_db";  _CLEAN_TABLE="users";;
+        payments)  _CLEAN_DB="payments_db";  _CLEAN_TABLE="orders";;
+        crm)       _CLEAN_DB="crm_db";       _CLEAN_TABLE="user_info";;
+        delivery)  _CLEAN_DB="delivery_db";  _CLEAN_TABLE="deliveries";;
+        *)         _CLEAN_DB=""; _CLEAN_TABLE="";;
+    esac
+    if [ -n "$_CLEAN_DB" ]; then
+        echo "  [scale] Limpando tabela ${_CLEAN_TABLE} em ${_CLEAN_DB} antes de estrear ${NEW_CONTAINER}..."
+        docker compose exec -T "${NEW_CONTAINER}_db" psql -U user -d "$_CLEAN_DB" \
+            -c "TRUNCATE TABLE ${_CLEAN_TABLE};" > /dev/null 2>&1 || true
+    fi
+
     echo ""
     echo "  [scale] Subindo: ${NEW_CONTAINER}..."
     # Zera o lag do novo serviço ANTES de iniciá-lo.
@@ -372,6 +394,15 @@ for n_svcs in 1 2 3 4; do
 
     # Aguarda consumer groups Kafka do novo serviço
     wait_kafka_consumers_ready "$NEW_KAFKA_PREFIX"
+
+    # Espera extra de estabilização após o novo serviço entrar no consumer group.
+    # O wait_kafka_consumers_ready confirma que o grupo tem membro ativo, mas o
+    # rebalance interno do Kafka pode ainda estar em andamento. Sem essa espera,
+    # o primeiro run de cada nova configuração tende a ter alta taxa de erro
+    # porque o consumer do novo serviço fica em pausa durante o rebalance e não
+    # processa as mensagens de validate enviadas pelo JMeter.
+    echo "  [scale] Aguardando estabilização do consumer group (15s)..."
+    sleep 15
 
     # Lista acumulada de serviços e containers ativos
     ACTIVE_SVCS=""
@@ -411,8 +442,13 @@ for n_svcs in 1 2 3 4; do
             -j "$JMETER_LOG" > /dev/null
         grep -E "summary|WARN|ERR" "$JMETER_LOG" | tail -3 || true
 
-        set_phase "pos"
+        # Mantém fase "pico" durante o 2PC (validate + execute responses).
+        # O JMeter termina rapidamente (retorno HTTP imediato), mas o trabalho
+        # pesado — 900 respostas Kafka + updates de DB — ocorre aqui.
+        # "pos" vira cooldown após tudo FINISHED, capturando o pico real de CPU.
         wait_finished "$TS_INICIO_DB"
+        set_phase "pos"
+        sleep "$REPOUSO_DURATION"
         stop_stats_collection
 
         # Completude via DB

@@ -2,11 +2,12 @@
 from .telemetry import configure_otel
 from typing import Optional
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
 from datetime import datetime
+import asyncio
 import os
 import logging
 import json
@@ -102,27 +103,16 @@ async def validate_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     Regra de negócio: Não pode deletar se houver pagamentos pendentes.
     """
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Validate Handler] Processando validação para account_id: {txt.get('account_id')}")
-    
+    logger.debug(f"[Validate Handler] account_id: {txt.get('account_id')}")
     db = SessionLocal()
     try:
-        # Busca todos os pedidos do usuário
-        orders = db.query(Order).filter(Order.account_id == txt["account_id"]).all()
-        
-        if not orders:
-            logger.info(f"[Validate Handler] Nenhum pedido encontrado para account_id: {txt['account_id']}")
-            return True, "Nenhum pedido encontrado"
-        
-        # Verifica se há pedidos pendentes ou em processamento
-        pending_orders = [o for o in orders if o.status in ["pending", "processing"]]
-        
-        if pending_orders:
-            logger.warning(f"[Validate Handler] Existem {len(pending_orders)} pedidos pendentes. Exclusão negada.")
-            return False, f"Existem {len(pending_orders)} pedidos pendentes. Não é possível deletar."
-        
-        logger.info(f"[Validate Handler] Validação OK. {len(orders)} pedidos podem ser deletados.")
-        return True, f"Validação OK. {len(orders)} pedidos confirmados/cancelados."
-        
+        pending_count = db.query(func.count(Order.id)).filter(
+            Order.account_id == txt["account_id"],
+            Order.status.in_(["pending", "processing"])
+        ).scalar() or 0
+        if pending_count > 0:
+            return False, f"Existem {pending_count} pedidos pendentes. Não é possível deletar."
+        return True, "Validação OK."
     except Exception as e:
         logger.error(f"[Validate Handler] Erro ao validar: {e}")
         return False, f"Erro ao validar: {e}"
@@ -134,23 +124,14 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     Executa a deleção de dados de pagamento.
     """
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Execute Handler] Processando execução para account_id: {txt.get('account_id')}")
-    
+    logger.debug(f"[Execute Handler] account_id: {txt.get('account_id')}")
     db = SessionLocal()
     try:
-        # Busca e deleta todos os pedidos do usuário
-        orders = db.query(Order).filter(Order.account_id == txt["account_id"]).all()
-        
-        if not orders:
-            logger.info(f"[Execute Handler] Nenhum pedido encontrado para deletar: {txt['account_id']}")
-            return True, "Nenhum pedido para deletar"
-        
-        deleted_count = len(orders)
-        db.query(Order).filter(Order.account_id == txt["account_id"]).delete(synchronize_session=False)
+        deleted_count = db.query(Order).filter(Order.account_id == txt["account_id"]).delete(synchronize_session=False)
         db.commit()
-        logger.info(f"[Execute Handler] {deleted_count} pedidos deletados para account_id: {txt['account_id']}")
+        if deleted_count == 0:
+            return True, "Nenhum pedido para deletar"
         return True, f"{deleted_count} pedidos deletados com sucesso"
-        
     except Exception as e:
         db.rollback()
         logger.error(f"[Execute Handler] Erro ao executar deleção: {e}")

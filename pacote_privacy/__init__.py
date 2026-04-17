@@ -82,25 +82,23 @@ class KafkaConsumerWrapper:
     async def _consume_loop(self, consumer_name: str, consumer: AIOKafkaConsumer, handler: Callable[[ConsumerRecord, AIOKafkaProducer], Awaitable[None]], response_topic: str):
         try:
             async for msg in consumer:
-                logger.info(f"[Consumer {consumer_name}] Recebido: {msg.value.decode()} do tópico {msg.topic} na partição {msg.partition} com offset {msg.offset}")
-                if handler:
+                try:
+                    result, reason = await handler(msg, self._producer)
+                    raw = json.loads(msg.value.decode())
+                    response_payload = {"result": result, "reason": reason, "service_name": self.client_id_prefix}
+                    response_payload.update(raw)
+                    await self._producer.send(response_topic, json.dumps(response_payload).encode('utf-8'))
+                    logger.debug(f"[Consumer {consumer_name}] resposta enviada request_id={raw.get('request_id')} result={result}")
+                except Exception as e:
+                    logger.error(f"[Consumer {consumer_name}] Erro ao processar mensagem: {e}", exc_info=True)
                     try:
-                        result, reason = await handler(msg, self._producer)
-                        response_payload = {"result": result, "reason": reason, "service_name": self.client_id_prefix}
-                        response_payload.update(json.loads(msg.value.decode()))
-                        await self._producer.send(response_topic, json.dumps(response_payload).encode('utf-8'))
-                        logger.info(f"[Consumer {consumer_name}] Publicado resposta: {response_payload} no tópico {response_topic}")
-                    except Exception as e:
-                        logger.error(f"[Consumer {consumer_name}] Erro ao processar mensagem: {e}", exc_info=True)
-                        # Envia resposta de erro para que o middleware não fique aguardando indefinidamente
-                        try:
-                            raw = json.loads(msg.value.decode())
-                            error_payload = {"result": False, "reason": f"Erro interno: {e}", "service_name": self.client_id_prefix}
-                            error_payload.update(raw)
-                            await self._producer.send(response_topic, json.dumps(error_payload).encode('utf-8'))
-                            logger.warning(f"[Consumer {consumer_name}] Resposta de erro publicada para request_id={raw.get('request_id')}")
-                        except Exception as e2:
-                            logger.error(f"[Consumer {consumer_name}] Falha ao publicar resposta de erro: {e2}", exc_info=True)
+                        raw = json.loads(msg.value.decode())
+                        error_payload = {"result": False, "reason": f"Erro interno: {e}", "service_name": self.client_id_prefix}
+                        error_payload.update(raw)
+                        await self._producer.send(response_topic, json.dumps(error_payload).encode('utf-8'))
+                        logger.warning(f"[Consumer {consumer_name}] Resposta de erro publicada para request_id={raw.get('request_id')}")
+                    except Exception as e2:
+                        logger.error(f"[Consumer {consumer_name}] Falha ao publicar resposta de erro: {e2}", exc_info=True)
         except asyncio.CancelledError:
             logger.info(f"[Consumer {consumer_name}] Loop cancelado (shutdown normal).")
         except Exception as e:

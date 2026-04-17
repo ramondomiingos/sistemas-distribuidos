@@ -104,7 +104,7 @@ Todas as dependências de runtime são instaladas automaticamente via `docker co
 
 **Python:**
 ```bash
-pip install psycopg2-binary faker requests
+pip install -r tools/requirements.txt
 ```
 
 | Pacote | Uso |
@@ -112,6 +112,9 @@ pip install psycopg2-binary faker requests
 | psycopg2-binary | Inserção direta nos bancos dos microsserviços via psycopg2 |
 | faker | Geração de dados sintéticos (nomes, e-mails, endereços) |
 | requests | Submissão individual de requisições HTTP (testes avulsos) |
+| numpy / pandas | Manipulação de dados na geração do notebook e análise estatística |
+| matplotlib / seaborn | Geração dos gráficos e heatmaps do notebook (`create_notebook.py`) |
+| scipy | Regressão linear para detecção de degradação de CPU entre runs (`linregress`) |
 
 **Apache JMeter** (geração de carga concorrente no benchmark):
 ```bash
@@ -289,7 +292,7 @@ Um middleware centralizador, utilizando padrão Two-Phase Commit adaptado para c
 - Docker 24.x ou superior
 - Docker Compose 2.x ou superior
 - 8 GB RAM disponível
-- Portas 3000, 5001-5004, 5432-5437, 8000, 8080, 9090, 9092, 2181 disponíveis
+- Portas 3000, 5432–5436, 8000–8004, 8010–8014, 8080, 9090, 9092, 2181 disponíveis
 - Apache JMeter 5.6+ (`brew install jmeter` no macOS) — necessário apenas para o benchmark
 
 ### Instalação
@@ -403,9 +406,9 @@ Cada execução segue três fases instrumentadas:
 
 | Fase | Duração | Descrição |
 |---|---|---|
-| `repouso` | 60 s | Sistema ocioso — coleta baseline de recursos sem carga |
-| `pico` | variável | Inserção de 900 contas + submissão de 900 requisições de exclusão em paralelo |
-| `pos` | até 120 s | Espera ativa por polling no banco até todas as requisições atingirem status terminal (margem de 30 s acima do máximo 2PC de 90 s) |
+| `repouso` | 30 s | Sistema ocioso — coleta baseline de recursos sem carga |
+| `pico` | variável (~17 s) | Inserção de 900 contas + submissão JMeter + processamento 2PC completo (validate e execute). A fase encerra somente após todas as requisições atingirem status terminal (`FINISHED`/`FAILED`), capturando o pico real de CPU gerado pelo processamento assíncrono das respostas Kafka |
+| `pos` | 30 s | Cooldown após conclusão do 2PC — coleta baseline de recuperação de recursos |
 
 ### Geração de Carga
 
@@ -421,13 +424,13 @@ Converte `account_ids.json` para `tools/accounts_for_jmeter.csv` (uma linha por 
 
 **3. Submissão concorrente** — Apache JMeter (`jmeter/benchmark_load.jmx`)
 
-O JMeter dispara 900 threads com ramp-up de 30 segundos. Cada thread lê um `account_id` único do CSV via `CSVDataSet` (modo `shareMode.all` — fila compartilhada, sem repetição) e envia um `POST /api/v1/privacy-requests/`. As métricas de latência HTTP de submissão são salvas em arquivo `.jtl` por run.
+O JMeter dispara 900 threads com ramp-up de 15 segundos. Cada thread lê um `account_id` único do CSV via `CSVDataSet` (modo `shareMode.all` — fila compartilhada, sem repetição) e envia um `POST /api/v1/privacy-requests/`. As métricas de latência HTTP de submissão são salvas em arquivo `.jtl` por run.
 
 ```
 tools/account_ids.json
        ↓ gen_accounts_csv.py
 tools/accounts_for_jmeter.csv
-       ↓ JMeter (900 threads, ramp-up 30s)
+       ↓ JMeter (900 threads, ramp-up 15s)
 POST /api/v1/privacy-requests/  ×900 concorrentes
        ↓
 Kafka → 2PC → FINISHED/FAILED
@@ -443,7 +446,7 @@ Para cada configuração (1, 2, 3 e 4 serviços), são realizados 20 runs indepe
 
 ### Experimento 2 — Benchmark Principal (20 Runs, 4 Serviços)
 
-Os 20 runs da última configuração de escalabilidade (n=4, todos os serviços ativos) são **também** os runs do benchmark principal. O script `benchmark.sh` coleta duplamente os artefatos para essa configuração: além do `scalability_summary.csv`, gera `benchmark_run_N_*.csv`, `completude_run_N_*.json`, `account_ids_run_N_*.json` e escreve no `benchmark_summary.csv`. Isso elimina a necessidade de uma fase separada, reduzindo o tempo total de ~4–6 h para **~2,5 h**.
+Os 20 runs da última configuração de escalabilidade (n=4, todos os serviços ativos) são **também** os runs do benchmark principal. O script `benchmark.sh` coleta duplamente os artefatos para essa configuração: além do `scalability_summary.csv`, gera `benchmark_run_N_*.csv`, `completude_run_N_*.json`, `account_ids_run_N_*.json` e escreve no `benchmark_summary.csv`. Isso elimina a necessidade de uma fase separada, reduzindo o tempo total de ~4–6 h para **~1,5 h**.
 
 ### Independência entre Runs
 
@@ -501,7 +504,7 @@ Esta seção descreve como reproduzir os resultados do artigo.
 
 ```bash
 # Dependências Python
-pip install psycopg2-binary faker requests
+pip install -r tools/requirements.txt
 
 # Apache JMeter (geração de carga concorrente)
 brew install jmeter        # macOS
@@ -531,7 +534,7 @@ TS_INICIO=$(date -u '+%Y-%m-%d %H:%M:%S')
 jmeter -n \
   -t jmeter/benchmark_load.jmx \
   -JACCOUNTS_CSV="$(pwd)/tools/accounts_for_jmeter.csv" \
-  -JNUM_THREADS=900 -JRAMP_UP=30 \
+  -JNUM_THREADS=900 -JRAMP_UP=15 \
   -JRESULTS_JTL=/tmp/teste_completude.jtl \
   -j /tmp/jmeter.log
 
@@ -556,7 +559,7 @@ cat /tmp/completude_resultado.json
 
 **Afirmação**: o middleware apresenta consumo de CPU concentrado na fase de pico, com recuperação consistente na fase pós-carga, e consumo de memória estável ao longo das execuções.
 
-**Tempo estimado**: o benchmark completo (80 runs de escalabilidade, dos quais os 20 do n=4 também são o benchmark principal) leva aproximadamente **~2,5 horas**.
+**Tempo estimado**: o benchmark completo (80 runs de escalabilidade, dos quais os 20 do n=4 também são o benchmark principal) leva aproximadamente **~1,5 horas**.
 
 ```bash
 # Executa o benchmark completo a partir da raiz do repositório

@@ -47,9 +47,9 @@ class KafkaService:
             # Inicializa o produtor
             self.producer = aiokafka.AIOKafkaProducer(
                 bootstrap_servers=KAFKA_BROKER,
-                acks='1',
+                acks=1,
                 max_batch_size=65536,
-                linger_ms=5,
+                linger_ms=0,
             )
             await self.producer.start()
 
@@ -126,7 +126,7 @@ class KafkaService:
             value = json.dumps(message).encode('utf-8')
             key_bytes = key.encode('utf-8') if key else None
             await self.producer.send_and_wait(topic, value=value, key=key_bytes)
-            logger.info(f"Message published to topic {topic}")
+            logger.debug(f"Message published to topic {topic}")
             return True
         except Exception as e:
             logger.error(f"Failed to publish message to topic {topic}: {str(e)}")
@@ -138,7 +138,15 @@ class KafkaService:
         logger.info(f"Handler registered for topic {topic}")
 
     async def _consume_messages(self, topic: str):
-        """Consome mensagens de um tópico específico"""
+        """Consome mensagens sequencialmente, buscando até BATCH_SIZE por poll.
+
+        asyncio.gather com SQLAlchemy síncrono não traz paralelismo real:
+        operações de DB bloqueiam o event loop de forma sequencial de qualquer
+        forma, e o gather priva os HTTP handlers de CPU, causando timeouts.
+        O processamento sequencial com batches maiores é suficiente e seguro.
+        """
+        BATCH_SIZE = 100
+
         consumer = self.consumers.get(topic)
         if not consumer:
             logger.error(f"No consumer found for topic {topic}")
@@ -152,23 +160,30 @@ class KafkaService:
         try:
             while self._running:
                 try:
-                    async for msg in consumer:
+                    records = await consumer.getmany(
+                        timeout_ms=200, max_records=BATCH_SIZE
+                    )
+                    msgs = [msg for batch in records.values() for msg in batch]
+
+                    for msg in msgs:
                         try:
                             value = json.loads(msg.value.decode('utf-8'))
                             await handler(value)
-                            await consumer.commit()
-                            logger.debug(f"Message processed from topic {topic}")
                         except json.JSONDecodeError as e:
-                            logger.error(f"Failed to decode message from topic {topic}: {e}")
+                            logger.error(f"JSON decode error on {topic}: {e}")
                         except Exception as e:
-                            logger.error(f"Error processing message from topic {topic}: {e}")
+                            logger.error(f"Handler error on {topic}: {e}")
+
+                    if msgs:
+                        await consumer.commit()
+
                 except asyncio.CancelledError:
                     logger.info(f"Consumer task cancelled for topic {topic}")
                     break
                 except Exception as e:
                     logger.error(f"Error consuming from topic {topic}: {e}")
                     if self._running:
-                        await asyncio.sleep(1)  # Espera antes de tentar novamente
+                        await asyncio.sleep(0.5)
         finally:
             logger.info(f"Consumer task finished for topic {topic}")
 
@@ -210,10 +225,7 @@ class KafkaService:
 async def handle_validate_response(message: Dict[str, Any]):
     """Handler para processar respostas de validação"""
     try:
-        request_id = message.get('request_id')
-        result = message.get('result')
-        logger.info(f"Received validation response for request {request_id} with result {result}")
-
+        logger.debug(f"[validate-resp] request={message.get('request_id')} svc={message.get('service_name')}")
         await create_register_validate_response(message)
     except Exception as e:
         logger.error(f"Error processing validation response: {str(e)}")
@@ -221,10 +233,7 @@ async def handle_validate_response(message: Dict[str, Any]):
 async def handle_execute_response(message: Dict[str, Any]):
     """Handler para processar respostas de execução"""
     try:
-        request_id = message.get('request_id')
-        result = message.get('result')
-        logger.info(f"Received validation response for request {request_id} with result {result}")
-
+        logger.debug(f"[execute-resp] request={message.get('request_id')} svc={message.get('service_name')}")
         await create_register_execute_response(message)
     except Exception as e:
         logger.error(f"Error processing execution response: {str(e)}")

@@ -5,6 +5,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Date
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
+import asyncio
 import os
 import logging
 import json
@@ -90,20 +91,13 @@ async def validate_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     CRM geralmente pode deletar dados sem restrições (dados sensíveis devem ser removíveis).
     """
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Validate Handler] Processando validação para account_id: {txt.get('account_id')}")
-    
+    logger.debug(f"[Validate Handler] account_id: {txt.get('account_id')}")
     db = SessionLocal()
     try:
-        # Busca informações do usuário
         user_info = db.query(UserInfo).filter(UserInfo.account_id == txt["account_id"]).first()
-        
         if not user_info:
-            logger.info(f"[Validate Handler] Nenhuma informação CRM encontrada para account_id: {txt['account_id']}")
             return True, "Nenhuma informação CRM encontrada"
-        
-        logger.info(f"[Validate Handler] Validação OK. Informação CRM pode ser deletada.")
         return True, "Validação OK. Dados sensíveis podem ser removidos."
-        
     except Exception as e:
         logger.error(f"[Validate Handler] Erro ao validar: {e}")
         return False, f"Erro ao validar: {e}"
@@ -115,20 +109,14 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     Executa a deleção de dados sensíveis do CRM.
     """
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Execute Handler] Processando execução para account_id: {txt.get('account_id')}")
-    
+    logger.debug(f"[Execute Handler] account_id: {txt.get('account_id')}")
     db = SessionLocal()
     try:
         deleted = db.query(UserInfo).filter(UserInfo.account_id == txt["account_id"]).delete(synchronize_session=False)
         db.commit()
-
         if deleted == 0:
-            logger.info(f"[Execute Handler] Nenhuma informação CRM encontrada para deletar: {txt['account_id']}")
             return True, "Nenhuma informação CRM para deletar"
-
-        logger.info(f"[Execute Handler] Informações CRM deletadas para account_id: {txt['account_id']}")
         return True, "Informações CRM deletadas com sucesso"
-        
     except Exception as e:
         db.rollback()
         logger.error(f"[Execute Handler] Erro ao executar deleção: {e}")

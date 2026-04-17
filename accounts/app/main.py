@@ -3,7 +3,7 @@ from math import e
 from .telemetry import configure_otel
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine, Column, Integer, String, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
@@ -96,34 +96,35 @@ kafka_wrapper: Optional[KafkaConsumerWrapper] = None
 
 async def validate_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Validate Handler] Processando: {txt}")
-    # Sua lgica aqui
+    logger.debug(f"[Validate Handler] account_id: {txt.get('account_id')}")
     db = SessionLocal()
-    user =  db.query(User).filter(User.account_id == txt["account_id"]).first()
-    if user is None:
-        logger.warning(f"[Validate Handler] Usuário não encontrado: {txt['account_id']}")
-        return True, "Usuário não encontrado" 
-    logger.info(f"user find: {user}")
-    return True, "Validação OK"
+    try:
+        user = db.query(User).filter(User.account_id == txt["account_id"]).first()
+        if user is None:
+            return True, "Usuário não encontrado"
+        return True, "Validação OK"
+    except Exception as e:
+        logger.error(f"[Validate Handler] Erro ao validar: {e}")
+        return False, f"Erro ao validar: {e}"
+    finally:
+        db.close()
 
 async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Execute Handler] Processando: {txt}")
-    # Sua lógica de execução aqui
+    logger.debug(f"[Execute Handler] account_id: {txt.get('account_id')}")
     db = SessionLocal()
     try:
-        delete_query =  db.query(User).filter(User.account_id == txt["account_id"]).first()
-        if delete_query is None:
-            logger.info(f"[Execute Handler] Usuário não encontrado: {txt['account_id']}")
-            return True, "Usuário não encontrado"
-        db.delete(delete_query)
+        deleted_count = db.query(User).filter(User.account_id == txt["account_id"]).delete(synchronize_session=False)
         db.commit()
-       
-        logger.info(f"Delete user with account_id: {txt['account_id']}")
+        if deleted_count == 0:
+            return True, "Usuário não encontrado"
         return True, "Execução concluída"
     except Exception as e:
+        db.rollback()
         logger.error(f"[Execute Handler] Erro ao executar: {e}")
         return False, f"Erro ao executar {e}"
+    finally:
+        db.close()
     
 
 @app.on_event("startup")

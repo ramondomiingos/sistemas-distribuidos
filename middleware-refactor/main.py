@@ -107,12 +107,15 @@ async def lifespan(app: FastAPI):
 
         logger.info("Starting Kafka service...")
         await kafka_service.start()
-
         logger.info("Kafka service started")
 
         logger.info("Initializing Kafka service...")
         await initialize_kafka_service()
         logger.info("Kafka service initialized")
+
+        from src.controller.privacy_request_service import refresh_service_cache
+        refresh_service_cache()
+        logger.info("Service cache loaded")
 
         logger.info("Application startup complete")
         yield

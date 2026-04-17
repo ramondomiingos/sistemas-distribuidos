@@ -2,11 +2,12 @@
 from .telemetry import configure_otel
 from typing import Optional
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, text, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
 from datetime import datetime
+import asyncio
 import os
 import logging
 import json
@@ -100,27 +101,16 @@ async def validate_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     Regra de negócio: Não pode deletar se houver entregas em trânsito.
     """
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Validate Handler] Processando validação para customer_id: {txt.get('account_id')}")
-    
+    logger.debug(f"[Validate Handler] customer_id: {txt.get('account_id')}")
     db = SessionLocal()
     try:
-        # Busca todas as entregas do cliente
-        deliveries = db.query(Delivery).filter(Delivery.customer_id == txt["account_id"]).all()
-        
-        if not deliveries:
-            logger.info(f"[Validate Handler] Nenhuma entrega encontrada para customer_id: {txt['account_id']}")
-            return True, "Nenhuma entrega encontrada"
-        
-        # Verifica se há entregas em trânsito
-        in_transit = [d for d in deliveries if d.status in ["out_for_delivery", "pending", "in_transit"]]
-        
-        if in_transit:
-            logger.warning(f"[Validate Handler] Existem {len(in_transit)} entregas em trânsito. Exclusão negada.")
-            return False, f"Existem {len(in_transit)} entregas em trânsito. Não é possível deletar."
-        
-        logger.info(f"[Validate Handler] Validação OK. {len(deliveries)} entregas podem ser deletadas.")
-        return True, f"Validação OK. {len(deliveries)} entregas finalizadas."
-        
+        in_transit_count = db.query(func.count(Delivery.id)).filter(
+            Delivery.customer_id == txt["account_id"],
+            Delivery.status.in_(["out_for_delivery", "pending", "in_transit"])
+        ).scalar() or 0
+        if in_transit_count > 0:
+            return False, f"Existem {in_transit_count} entregas em trânsito. Não é possível deletar."
+        return True, "Validação OK."
     except Exception as e:
         logger.error(f"[Validate Handler] Erro ao validar: {e}")
         return False, f"Erro ao validar: {e}"
@@ -132,23 +122,14 @@ async def execute_handler(msg: ConsumerRecord, producer: AIOKafkaProducer):
     Executa a deleção de dados de entrega.
     """
     txt = json.loads(msg.value.decode())
-    logger.info(f"[Execute Handler] Processando execução para customer_id: {txt.get('account_id')}")
-    
+    logger.debug(f"[Execute Handler] customer_id: {txt.get('account_id')}")
     db = SessionLocal()
     try:
-        # Busca e deleta todas as entregas do cliente
-        deliveries = db.query(Delivery).filter(Delivery.customer_id == txt["account_id"]).all()
-        
-        if not deliveries:
-            logger.info(f"[Execute Handler] Nenhuma entrega encontrada para deletar: {txt['account_id']}")
-            return True, "Nenhuma entrega para deletar"
-        
-        deleted_count = len(deliveries)
-        db.query(Delivery).filter(Delivery.customer_id == txt["account_id"]).delete(synchronize_session=False)
+        deleted_count = db.query(Delivery).filter(Delivery.customer_id == txt["account_id"]).delete(synchronize_session=False)
         db.commit()
-        logger.info(f"[Execute Handler] {deleted_count} entregas deletadas para customer_id: {txt['account_id']}")
+        if deleted_count == 0:
+            return True, "Nenhuma entrega para deletar"
         return True, f"{deleted_count} entregas deletadas com sucesso"
-        
     except Exception as e:
         db.rollback()
         logger.error(f"[Execute Handler] Erro ao executar deleção: {e}")

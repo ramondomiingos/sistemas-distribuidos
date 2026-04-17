@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from src.db.base import get_db
-from src.kafka.producer import publish_message, kafka_producer
 from src.models.privacy_request import OperationsExecution
 from src.models.privacy_request_service import OperationsExecution as OperationsExecutionServices
 from src.schemas.privacy_request import (

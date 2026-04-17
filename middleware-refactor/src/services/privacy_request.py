@@ -20,7 +20,6 @@ class PrivacyRequestService:
         self.db.add(db_obj)
         try:
             self.db.commit()
-            self.db.refresh(db_obj)
         except Exception as e:
             self.db.rollback()
             raise HTTPException(status_code=400, detail=str(e))

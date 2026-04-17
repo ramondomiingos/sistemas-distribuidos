@@ -15,7 +15,10 @@ async def create_service(
     service: ServiceCreate,
     db: Session = Depends(get_db)
 ):
-    return ServiceService(db).create(service)
+    result = ServiceService(db).create(service)
+    from src.controller.privacy_request_service import refresh_service_cache
+    refresh_service_cache()
+    return result
 
 @router.get("/", response_model=List[Service])
 @track_request_time

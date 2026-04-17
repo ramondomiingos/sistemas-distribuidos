@@ -22,7 +22,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@payments_db/payments_db
       - KAFKA_BROKER=kafka:9092
-      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=false
       - OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
@@ -59,7 +59,7 @@ services:
       - ./pacote_privacy:/app/app/pacote_privacy
     environment:
       - DATABASE_URL=postgresql://user:password@accounts_db/accounts_db
-      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=false
       - OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
@@ -98,7 +98,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@crm_db/crm_db
       - KAFKA_BROKER=kafka:9092
-      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=false
       - OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
@@ -136,7 +136,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@delivery_db/delivery_db
       - KAFKA_BROKER=kafka:9092
-      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=false
       - OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
@@ -172,7 +172,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://user:password@middleware_db/middlewaredb
       - KAFKA_BROKER=kafka:9092
-      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=true
+      - OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED=false
       - OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_ENDPOINT=otel:4317
       - OTEL_EXPORTER_OTLP_INSECURE=true
@@ -188,6 +188,7 @@ services:
 
   middleware_db:
     image: postgres:13
+    command: postgres -c max_connections=200
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password

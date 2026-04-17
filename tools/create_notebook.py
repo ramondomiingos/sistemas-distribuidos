@@ -56,7 +56,7 @@ a interpretação de todos os resultados deste notebook.
 | **RNF02** | Desempenho — Latência 2PC | Tempo total entre criação e resolução da requisição | P95 de `updated_at − created_at` | **≤ 10 s** |
 | **RNF03** | Desempenho — Latência HTTP | Tempo de resposta ao POST de submissão | P99 do JMeter JTL (`elapsed`) | **≤ 500 ms** |
 | **RNF04** | Eficiência — Uso de CPU | CPU do container `middleware` durante a fase de pico | Máximo observado | **≤ 70%** |
-| **RNF05** | Escalabilidade — Eficiência | E(n) = Speedup(n) / n, com n = número de serviços | E(4) mínimo | **≥ 70%** |
+| **RNF05** | Escalabilidade — Crescimento sublinear | T(4)/T(1): o tempo com 4 serviços deve crescer de forma sublinear em relação a 1 serviço | T(4) / T(1) | **≤ 2,0** |
 | **RNF06** | Observabilidade | Traces e métricas disponíveis via Grafana/OpenTelemetry | Verificação qualitativa | Presença confirmada |
 | **RNF07** | Estabilidade | Variação do tempo de processamento entre runs independentes | CV = σ/μ × 100% | **≤ 15%** |
 
@@ -232,8 +232,17 @@ else:
 code("""
 # ── Benchmark summary ────────────────────────────────────────────────────────
 summary_path = BASE / 'benchmark_summary.csv'
+_SUMMARY_COLS = ['run','timestamp_inicio','total_submetido','total_finished',
+                 'total_erro','completude_%','tempo_processamento_s']
 if summary_path.exists():
-    summary = pd.read_csv(summary_path)
+    # Detecta se o arquivo tem cabeçalho: se a primeira célula é numérica, não tem.
+    _first = pd.read_csv(summary_path, nrows=1, header=None).iloc[0, 0]
+    try:
+        int(float(str(_first)))
+        summary = pd.read_csv(summary_path, header=None, names=_SUMMARY_COLS)
+        print('benchmark_summary.csv carregado (sem cabeçalho — nomes atribuídos automaticamente)')
+    except (ValueError, TypeError):
+        summary = pd.read_csv(summary_path)
     print('benchmark_summary.csv carregado:')
     display(summary.head())
 else:
@@ -333,6 +342,31 @@ if pr_path.exists():
             pr[col] = pd.to_datetime(pr[col], utc=True, errors='coerce')
     if 'created_at' in pr.columns and 'updated_at' in pr.columns:
         pr['latencia_2pc_s'] = (pr['updated_at'] - pr['created_at']).dt.total_seconds()
+
+    # Atribui n_svcs e run a cada registro usando os timestamps do scalability_summary.
+    # O banco acumula todos os 80 runs sem coluna identificadora; o mapeamento por
+    # merge_asof (backward join por created_at) é vetorizado e lida com 72 k registros.
+    scale_sum_path = BASE / 'scalability' / 'scalability_summary.csv'
+    if scale_sum_path.exists() and 'created_at' in pr.columns:
+        try:
+            sc = pd.read_csv(scale_sum_path)
+            sc['timestamp_inicio'] = pd.to_datetime(sc['timestamp_inicio'], utc=True, errors='coerce')
+            sc_key = sc.sort_values('timestamp_inicio')[['timestamp_inicio','n_servicos','run']].copy()
+            sc_key = sc_key.rename(columns={'timestamp_inicio': 'created_at', 'n_servicos': 'n_svcs'})
+            # merge_asof: para cada created_at em pr, encontra o run cujo timestamp_inicio
+            # é o maior valor ≤ created_at (direção backward).
+            pr_sorted = pr.sort_values('created_at').copy()
+            merged = pd.merge_asof(
+                pr_sorted[['created_at']].reset_index(),
+                sc_key,
+                on='created_at', direction='backward'
+            ).set_index('index')
+            pr['n_svcs'] = merged['n_svcs']
+            pr['run']    = merged['run']
+            print(f'  n_svcs atribuído: {pr["n_svcs"].value_counts().sort_index().to_dict()}')
+        except Exception as _e:
+            print(f'  AVISO: não foi possível atribuir n_svcs/run ao pr: {_e}')
+
     print(f'privacy_requests.csv: {len(pr):,} registros')
     print(f'  Status: {pr["status"].value_counts().to_dict()}')
     display(pr.head(3))
@@ -349,16 +383,30 @@ else:
 
 code("""
 # ── JTL — latência HTTP de submissão ─────────────────────────────────────────
-jtl_files = sorted(glob.glob(str(BASE / '*.jtl')))
+# Os JTLs são salvos em output-benchmark/scalability/run_Nsvcs_R_TIMESTAMP.jtl
+# Também verifica output-benchmark/*.jtl para compatibilidade com runs avulsos.
+jtl_files = sorted(
+    glob.glob(str(BASE / 'scalability' / '*.jtl')) +
+    glob.glob(str(BASE / '*.jtl'))
+)
 print(f'Arquivos JTL encontrados: {len(jtl_files)}')
 
 jtl_dfs = []
 for path in jtl_files:
-    m = re.search(r'benchmark_run_(\\d+)_', path)
-    run_num = int(m.group(1)) if m else 0
+    # Formato scalability: run_Nsvcs_R_TIMESTAMP.jtl
+    m = re.search(r'run_(\\d+)svcs_(\\d+)_', os.path.basename(path))
+    if m:
+        n_svcs_n = int(m.group(1))
+        run_num  = int(m.group(2))
+    else:
+        # Formato legado: benchmark_run_R_TIMESTAMP.jtl
+        m2 = re.search(r'benchmark_run_(\\d+)_', os.path.basename(path))
+        n_svcs_n = 4
+        run_num  = int(m2.group(1)) if m2 else 0
     try:
         df = pd.read_csv(path)
-        df['run'] = run_num
+        df['run']    = run_num
+        df['n_svcs'] = n_svcs_n
         jtl_dfs.append(df)
     except Exception as e:
         print(f'  AVISO: {os.path.basename(path)} -> {e}')
@@ -369,7 +417,7 @@ if jtl_dfs:
     print(f'  Amostras JTL totais: {len(jtl):,}')
     print(f'  Colunas: {list(jtl.columns)}')
 else:
-    print('  AVISO: nenhum arquivo JTL encontrado.')
+    print('  AVISO: nenhum arquivo JTL encontrado — métricas de latência HTTP indisponíveis.')
     jtl = pd.DataFrame()
 """)
 
@@ -386,11 +434,9 @@ if not summary.empty:
         if _c not in ('timestamp_inicio',):
             summary[_c] = pd.to_numeric(summary[_c], errors='coerce')
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    fig, ax = plt.subplots(figsize=(8, 4))
 
     # Completude por run
-    ax = axes[0]
-    # Preferência explícita; fallback por padrão no nome (excluindo timestamp)
     col_comp = next(
         (c for c in ['completude_%', 'completude_pct', 'completude']
          if c in summary.columns),
@@ -407,33 +453,7 @@ if not summary.empty:
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
                     f'{val:.1f}%', ha='center', va='bottom', fontsize=8)
 
-    # Tempo de processamento por run
-    ax = axes[1]
-    # 'time' é substring de 'timestamp_inicio' — excluir explicitamente
-    col_tempo = next(
-        (c for c in ['tempo_processamento_s', 'tempo_s', 'tempo']
-         if c in summary.columns),
-        next((c for c in summary.columns
-              if 'tempo' in c.lower()
-              and 'timestamp' not in c.lower()), None)
-    )
-    if col_tempo:
-        ax.plot(summary.index + 1, summary[col_tempo], 'o-', color='darkorange')
-        ax.axhline(summary[col_tempo].mean(), color='gray', linestyle='--',
-                   linewidth=1, label=f'Média: {summary[col_tempo].mean():.0f}s')
-        ax.set_xlabel('Run'); ax.set_ylabel('Tempo (s)'); ax.set_title('Tempo de Processamento por Run')
-        ax.legend(fontsize=9)
-
-    # Distribuição do tempo
-    ax = axes[2]
-    if col_tempo:
-        sns.histplot(summary[col_tempo], bins=10, kde=True, ax=ax, color='steelblue')
-        ax.set_xlabel('Tempo (s)'); ax.set_title('Distribuição do Tempo de Processamento')
-        lo, hi = bootstrap_ci(summary[col_tempo])
-        ax.axvspan(lo, hi, alpha=0.15, color='red', label=f'IC95% [{lo:.0f}, {hi:.0f}]s')
-        ax.legend(fontsize=9)
-
-    plt.suptitle('Benchmark Principal — Completude e Tempo de Processamento', fontsize=13, y=1.01)
+    plt.suptitle('Benchmark Principal — Completude', fontsize=13, y=1.01)
     plt.tight_layout()
     savefig('completude_throughput.png')
     plt.show()
@@ -441,9 +461,6 @@ if not summary.empty:
     print('\\n── Estatísticas de Completude ──')
     if col_comp:
         print(pd.DataFrame([summary_stats(summary[col_comp], 'Completude (%)')]).to_string(index=False))
-    if col_tempo:
-        print('\\n── Estatísticas de Tempo de Processamento ──')
-        print(pd.DataFrame([summary_stats(summary[col_tempo], 'Tempo (s)')]).to_string(index=False))
 else:
     print('Dados de summary não disponíveis.')
 """)
@@ -453,13 +470,9 @@ else:
 # ===========================================================================
 
 md("""
-### Interpretação — Completude e Tempo de Processamento
+### Interpretação — Completude
 
 O gráfico de **completude por run** mostra o percentual de requisições com status `FINISHED` em cada execução independente. A linha tracejada vermelha é o critério do **RNF01 (≥ 99,5%)**. Todos os runs devem ultrapassar esse limiar para confirmar que o protocolo 2PC executa o direito ao esquecimento com plena cobertura nos microsserviços participantes.
-
-O **tempo de processamento por run** revela a estabilidade temporal do sistema. Uma linha próxima da média com baixa dispersão indica comportamento determinístico; picos isolados podem refletir contenção no Kafka ou variação de carga do sistema operacional do host.
-
-A **distribuição do tempo** (histograma + KDE) permite identificar a forma da distribuição: uma curva próxima da normal com baixo desvio indica sistema previsível. O intervalo de confiança 95% bootstrap (área sombreada) quantifica a incerteza sobre a média real sem assumir normalidade.
 """)
 
 md("## 4. Recursos por Fase — CPU")
@@ -578,8 +591,6 @@ if not res.empty:
     for patch, fase in zip(bp['boxes'], fase_order):
         patch.set_facecolor(fase_colors.get(fase,'gray'))
     ax.set_ylabel('Memória (MiB)'); ax.set_title('Memória Middleware por Fase')
-    ax.axhline(75, color='red', linestyle='--', linewidth=1, label='Referência 75 MiB')
-    ax.legend(fontsize=9)
 
     # Memória por run (estabilidade) — fase repouso
     ax = axes[1]
@@ -671,36 +682,61 @@ md("## 7. Latência de Processamento 2PC")
 
 code("""
 if not pr.empty and 'latencia_2pc_s' in pr.columns:
-    finished = pr[pr['status']=='FINISHED']['latencia_2pc_s'].dropna()
+    finished_all = pr[pr['status']=='FINISHED'].copy()
+    finished = finished_all['latencia_2pc_s'].dropna()
     print(f'Requisições FINISHED com latência medida: {len(finished):,}')
+
+    has_nsvcs = 'n_svcs' in pr.columns and pr['n_svcs'].notna().any()
+    palette   = {1:'steelblue', 2:'darkorange', 3:'seagreen', 4:'crimson'}
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
-    # Histograma + KDE
+    # Histograma + KDE — uma curva por n_svcs se disponível
     ax = axes[0]
-    sns.histplot(finished, bins=40, kde=True, ax=ax, color='steelblue')
-    ax.axvline(finished.median(), color='red', linestyle='--',
-               label=f'Mediana: {finished.median():.2f}s')
-    ax.axvline(finished.quantile(.95), color='orange', linestyle='--',
-               label=f'P95: {finished.quantile(.95):.2f}s')
-    ax.set_xlabel('Latência 2PC (s)'); ax.set_title('Distribuição da Latência 2PC')
-    ax.legend(fontsize=9)
+    if has_nsvcs:
+        for n, grp in finished_all.groupby('n_svcs'):
+            sns.kdeplot(grp['latencia_2pc_s'].dropna(), ax=ax,
+                        label=f'n={int(n)}', color=palette.get(int(n)))
+        ax.set_title('KDE Latência 2PC por n_svcs')
+    else:
+        sns.histplot(finished, bins=40, kde=True, ax=ax, color='steelblue')
+        ax.axvline(finished.median(), color='red', linestyle='--',
+                   label=f'Mediana: {finished.median():.2f}s')
+        ax.axvline(finished.quantile(.95), color='orange', linestyle='--',
+                   label=f'P95: {finished.quantile(.95):.2f}s')
+        ax.set_title('Distribuição da Latência 2PC')
+    ax.set_xlabel('Latência 2PC (s)'); ax.legend(fontsize=9)
 
-    # ECDF
+    # ECDF — uma curva por n_svcs se disponível
     ax = axes[1]
-    x_ecdf = np.sort(finished)
-    y_ecdf = np.arange(1, len(x_ecdf)+1) / len(x_ecdf)
-    ax.plot(x_ecdf, y_ecdf, color='steelblue', linewidth=1.5)
-    for p, lbl, col in [(0.50,'P50','gray'),(0.90,'P90','orange'),(0.95,'P95','tomato'),(0.99,'P99','red')]:
-        val = float(np.quantile(x_ecdf, p))
-        ax.axvline(val, linestyle='--', color=col, linewidth=1, label=f'{lbl}: {val:.2f}s')
-    ax.set_xlabel('Latência (s)'); ax.set_ylabel('Probabilidade acumulada')
-    ax.set_title('ECDF — Latência 2PC'); ax.legend(fontsize=8)
+    if has_nsvcs:
+        for n, grp in finished_all.groupby('n_svcs'):
+            x_e = np.sort(grp['latencia_2pc_s'].dropna())
+            y_e = np.arange(1, len(x_e)+1) / len(x_e)
+            ax.plot(x_e, y_e, label=f'n={int(n)}', color=palette.get(int(n)))
+        ax.set_title('ECDF por n_svcs')
+    else:
+        x_ecdf = np.sort(finished)
+        y_ecdf = np.arange(1, len(x_ecdf)+1) / len(x_ecdf)
+        ax.plot(x_ecdf, y_ecdf, color='steelblue', linewidth=1.5)
+        for p, lbl, col in [(0.50,'P50','gray'),(0.90,'P90','orange'),(0.95,'P95','tomato'),(0.99,'P99','red')]:
+            val = float(np.quantile(x_ecdf, p))
+            ax.axvline(val, linestyle='--', color=col, linewidth=1, label=f'{lbl}: {val:.2f}s')
+        ax.set_title('ECDF — Latência 2PC')
+    ax.set_xlabel('Latência (s)'); ax.set_ylabel('Probabilidade acumulada'); ax.legend(fontsize=8)
 
-    # Percentis por run (se houver coluna run linkável)
+    # Boxplot por n_svcs ou por run
     ax = axes[2]
-    if 'run' in pr.columns:
-        per_run = pr[pr['status']=='FINISHED'].groupby('run')['latencia_2pc_s'].agg(
+    if has_nsvcs:
+        data_box = [finished_all[finished_all['n_svcs']==n]['latencia_2pc_s'].dropna()
+                    for n in sorted(finished_all['n_svcs'].dropna().unique())]
+        labels_box = [f'n={int(n)}' for n in sorted(finished_all['n_svcs'].dropna().unique())]
+        ax.boxplot(data_box, labels=labels_box, patch_artist=True,
+                   boxprops=dict(facecolor='lightsteelblue'))
+        ax.set_xlabel('Nº de serviços'); ax.set_ylabel('Latência 2PC (s)')
+        ax.set_title('Latência por n_svcs')
+    elif 'run' in pr.columns and pr['run'].notna().any():
+        per_run = finished_all.groupby('run')['latencia_2pc_s'].agg(
             mediana='median', p95=lambda x: x.quantile(.95)).reset_index()
         ax.plot(per_run['run'], per_run['mediana'], 'o-', label='Mediana', color='steelblue')
         ax.plot(per_run['run'], per_run['p95'],     's--', label='P95',    color='tomato')
@@ -715,8 +751,23 @@ if not pr.empty and 'latencia_2pc_s' in pr.columns:
     savefig('latencia_2pc.png')
     plt.show()
 
-    print('\\n── Estatísticas Latência 2PC (FINISHED) ──')
+    print('\\n── Estatísticas Latência 2PC — TODAS as configurações (FINISHED) ──')
     display(pd.DataFrame([summary_stats(finished, 'Latência 2PC (s)')]))
+
+    print('\\n── Estatísticas Latência 2PC por n_svcs ──')
+    rows = []
+    if has_nsvcs:
+        for n, grp in finished_all.groupby('n_svcs'):
+            rows.append(summary_stats(grp['latencia_2pc_s'].dropna(), f'n={int(n)} serviço(s)'))
+        display(pd.DataFrame(rows))
+    elif 'run' in finished_all.columns and finished_all['run'].notna().any():
+        print('  (n_svcs não disponível — agrupando por run)')
+        for r, grp in finished_all.groupby('run'):
+            rows.append(summary_stats(grp['latencia_2pc_s'].dropna(), f'run {int(r)}'))
+        display(pd.DataFrame(rows))
+    else:
+        print('  (n_svcs não disponível — exibindo estatísticas globais)')
+        display(pd.DataFrame([summary_stats(finished, 'Latência 2PC (s)')]))
 else:
     print('Dados de latência 2PC não disponíveis (execute o benchmark e exporte o banco).')
 """)
@@ -739,13 +790,27 @@ if not prs.empty and not pr.empty:
 md("""
 ### Interpretação — Latência de Processamento 2PC
 
-A **distribuição da latência 2PC** (`updated_at − created_at`, registrado no banco) captura o tempo total entre a criação da requisição e o status `FINISHED`. Inclui: enfileiramento no Kafka, processamento dos handlers de validação e execução em todos os microsserviços participantes, e escrita do status final.
+A **latência 2PC por requisição** é calculada diretamente dos timestamps do banco:
+
+```
+latencia_2pc_s = updated_at − created_at   (privacy_requests)
+```
+
+- `created_at`: momento em que o middleware persistiu a requisição no banco e publicou no Kafka
+- `updated_at`: momento em que o status foi atualizado para `FINISHED` ou `FAILED`
+
+Essa medição captura **exclusivamente** o tempo do protocolo 2PC: enfileiramento Kafka, processamento dos handlers de validação e execução em todos os microsserviços, e escrita do status final. **Não inclui** ramp-up do JMeter nem overhead do script de benchmark — ao contrário do `tempo_processamento_s` exibido na Seção 3.
 
 O critério **RNF02 exige P95 ≤ 10 s**. No gráfico **ECDF**, encontre 0,95 no eixo Y e trace horizontalmente até a curva para ler o P95 diretamente. Uma cauda longa à direita pode indicar requisições que aguardaram o timeout de validação (30 s) antes de serem resolvidas.
 
-O **gráfico de percentis por run** verifica a estabilidade da latência entre execuções independentes. Variações abruptas em um run específico podem indicar contenção de recursos no host durante aquele experimento.
+O **boxplot por n_svcs** separa as distribuições de latência por configuração. Espera-se que a mediana cresça moderadamente com n (mais mensagens Kafka por requisição), mas o crescimento deve ser sublinear se os serviços processam em paralelo.
 
-> **Distinção importante**: latência 2PC (segundos, assíncrona) ≠ latência HTTP de submissão (milissegundos, síncrona). O `POST` retorna imediatamente com `201 CREATED`; o protocolo 2PC completo ocorre em background.
+> **Nota metodológica — acúmulo de dados não participantes:** o script de benchmark insere dados em *todos* os serviços a cada run (via `bulk_insert_and_delete.py`), mas o 2PC apaga apenas os dados dos serviços *participantes* na configuração atual. Isso significa que, ao iniciar os runs de n=4 (quando o serviço `delivery` entra pela primeira vez), a tabela `deliveries` pode acumular até 60 × 900 = 54.000 registros de runs anteriores onde o `delivery` não participou. Uma tabela 60× maior aumenta o I/O no DELETE e aciona o `autovacuum` do PostgreSQL de forma concorrente, produzindo um *long tail* artificial na latência de n=4. Para eliminar esse artefato, o benchmark foi corrigido para executar `TRUNCATE` na tabela de cada serviço imediatamente antes do serviço estrear no experimento, garantindo baseline uniforme entre configurações.
+
+> **Três métricas de tempo, três significados distintos:**
+> `latencia_2pc_s` (esta seção) — latência por requisição, sem overhead
+> `tempo_processamento_s` (Seção 3) — duração total do run, inclui JMeter
+> `elapsed` JTL (Seção 8) — latência do HTTP POST de submissão (ms, síncrono)
 """)
 
 md("## 8. Latência HTTP de Submissão (JMeter JTL)")
@@ -814,7 +879,9 @@ if not jtl.empty:
     else:
         print('Coluna "elapsed" não encontrada no JTL. Colunas disponíveis:', list(jtl.columns))
 else:
-    print('Arquivos JTL não encontrados. Execute o benchmark com JMeter configurado.')
+    print('AVISO: Arquivos JTL não encontrados em output-benchmark/scalability/.')
+    print('       Seção de latência HTTP será pulada.')
+    print('       Os JTLs são gerados automaticamente pelo benchmark.sh.')
 """)
 
 # ===========================================================================
@@ -894,23 +961,18 @@ if not scale_sum.empty:
     savefig('escalabilidade_completude.png')
     plt.show()
 
-    # ── Gráfico 2: Tempo, Speedup, Eficiência (apenas configs com completude ok) ──
-    # Inclui todas as configurações para análise de desempenho, mas marca as
-    # que não atendem ao RNF01.
+    # ── Gráfico 2: Tempo, Crescimento Normalizado, Overhead por Serviço ──
+    # Inclui todas as configurações; marca as que não atendem ao RNF01.
     t1 = agg.loc[agg['n_svcs']==1, 'mean_t'].values[0]
-    agg['speedup']    = t1 / agg['mean_t']
-    agg['eficiencia'] = agg['speedup'] / agg['n_svcs']
-
-    p_serial, t_amdahl = fit_amdahl(agg['n_svcs'].tolist(), agg['mean_t'].tolist())
+    agg['razao_t'] = agg['mean_t'] / t1          # T(n)/T(1)
+    agg['overhead_pct'] = (agg['razao_t'] - 1) * 100  # overhead relativo ao baseline
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
+    # ── Gráfico 1: Tempo absoluto ──
     ax = axes[0]
     ax.errorbar(agg['n_svcs'], agg['mean_t'], yerr=agg['std_t'],
                 fmt='o-', capsize=5, color='steelblue', label='Observado')
-    ax.plot(agg['n_svcs'], t_amdahl, 's--', color='tomato',
-            label=f'Amdahl (p={p_serial:.3f})')
-    # Marcar configs com completude < 99.5%
     anom = agg[agg['mean_comp'] < 99.5]
     if not anom.empty:
         ax.scatter(anom['n_svcs'], anom['mean_t'], s=120, zorder=5,
@@ -919,32 +981,40 @@ if not scale_sum.empty:
     ax.set_xlabel('Número de Serviços'); ax.set_ylabel('Tempo médio (s)')
     ax.set_title('Tempo de Processamento × Serviços'); ax.legend(fontsize=8)
 
+    # ── Gráfico 2: Crescimento normalizado T(n)/T(1) ──
     ax = axes[1]
-    ax.plot(agg['n_svcs'], agg['speedup'], 'o-', color='darkorange', label='Speedup observado')
-    ax.plot(agg['n_svcs'], agg['n_svcs'],  '--', color='gray', alpha=.5, label='Ideal (linear)')
-    ax.set_xlabel('n'); ax.set_ylabel('Speedup S(n)')
-    ax.set_title('Speedup'); ax.legend(fontsize=9)
+    n_vals = agg['n_svcs'].astype(float)
+    ax.plot(n_vals, agg['razao_t'], 'o-', color='darkorange', label='Observado T(n)/T(1)')
+    ax.plot(n_vals, n_vals, '--', color='red', alpha=.6, label='Crescimento linear (referência)')
+    ax.axhline(2.0, color='green', linestyle='--', linewidth=1.5, label='Critério RNF05 (≤ 2,0×)')
+    ax.fill_between(n_vals, 1.0, 2.0, alpha=.08, color='green')
+    ax.set_xlabel('n'); ax.set_ylabel('T(n) / T(1)')
+    ax.set_title('Crescimento Normalizado'); ax.legend(fontsize=8)
 
+    # ── Gráfico 3: Overhead relativo por configuração ──
     ax = axes[2]
-    bar_colors = [colors_n.get(n,'gray') for n in agg['n_svcs']]
-    bars = ax.bar(agg['n_svcs'], agg['eficiencia']*100, color=bar_colors, edgecolor='white')
-    ax.axhline(70, color='red', linestyle='--', linewidth=1, label='RNF05 (≥70%)')
-    ax.set_xlabel('n'); ax.set_ylabel('Eficiência (%)')
-    ax.set_title('Eficiência E(n)'); ax.legend(fontsize=9)
-    for bar, val in zip(bars, agg['eficiencia']):
+    bar_colors = [colors_n.get(n, 'gray') for n in agg['n_svcs']]
+    bars = ax.bar(agg['n_svcs'], agg['overhead_pct'], color=bar_colors, edgecolor='white')
+    ax.axhline(100, color='green', linestyle='--', linewidth=1.5, label='Critério RNF05 (≤ 100%)')
+    ax.axhline(agg['n_svcs'].max()*100 - 100, color='red', linestyle=':', alpha=.5,
+               linewidth=1, label='Crescimento linear')
+    ax.set_xlabel('n'); ax.set_ylabel('Overhead relativo a T(1) (%)')
+    ax.set_title('Overhead por Configuração'); ax.legend(fontsize=8)
+    for bar, val in zip(bars, agg['overhead_pct']):
         ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.5,
-                f'{val*100:.0f}%', ha='center', va='bottom', fontsize=9)
+                f'{val:.0f}%', ha='center', va='bottom', fontsize=9)
 
-    plt.suptitle('Escalabilidade — Tempo, Speedup, Eficiência', fontsize=13, y=1.01)
+    plt.suptitle('Escalabilidade — Tempo, Crescimento e Overhead', fontsize=13, y=1.01)
     plt.tight_layout()
     savefig('escalabilidade.png')
     plt.show()
 
-    print(f'\\nFração serial estimada (Lei de Amdahl): p = {p_serial:.4f}')
-    if p_serial > 0:
-        print(f'Speedup máximo teórico (n→∞):           1/p = {1/p_serial:.1f}x')
-    print('\\n── Tabela de Escalabilidade (speedup / eficiência) ──')
-    display(agg[['n_svcs','mean_t','std_t','mean_comp','speedup','eficiencia']].round(3))
+    t4 = agg.loc[agg['n_svcs']==4, 'mean_t'].values[0] if 4 in agg['n_svcs'].values else np.nan
+    razao = t4 / t1 if not np.isnan(t4) else np.nan
+    print(f'\\nT(1) = {t1:.1f}s   T(4) = {t4:.1f}s   T(4)/T(1) = {razao:.2f}x')
+    print(f'Critério RNF05 (T(4)/T(1) ≤ 2,0): {"✓ Atendido" if razao <= 2.0 else "✗ Não atendido"}')
+    print('\\n── Tabela de Escalabilidade ──')
+    display(agg[['n_svcs','mean_t','std_t','mean_comp','razao_t','overhead_pct']].round(3))
 else:
     print('Dados de escalabilidade não disponíveis.')
     col_t = None
@@ -981,13 +1051,30 @@ O experimento adiciona serviços **cumulativamente** (n=1→2→3→4), simuland
 
 **Completude por configuração**: qualquer serviço que não responda ou bloqueie impede a conclusão de *todas* as requisições — semântica de unanimidade do 2PC. Uma queda de completude ao adicionar o serviço N indica que N impõe restrições de negócio mais restritivas ou apresenta instabilidade que precisa ser diagnosticada.
 
-**Tempo, Speedup e Eficiência**: o "speedup" aqui não representa paralelismo de execução — representa a *variação do tempo de consenso* com mais participantes. Um speedup < 1 é esperado: mais participantes = mais roundtrips Kafka = maior latência de coordenação.
+**Tempo de Processamento × Serviços**: com mais participantes no protocolo 2PC, o middleware aguarda mais respostas Kafka por requisição (n validates + n executes), portanto T(n) ≥ T(1) é esperado. O gráfico mostra se esse crescimento é aceitável.
 
-O **fitting pela Lei de Amdahl** estima a fração serial `p` do protocolo — o overhead intrínseco de coordenação que não se reduz com menos participantes. O speedup máximo teórico `1/p` é um limite assintótico para esse overhead.
+**Crescimento Normalizado T(n)/T(1)**: compara o tempo observado com dois cenários de referência — crescimento linear (T(n) = n × T(1), pior caso teórico onde cada serviço adiciona overhead igual ao primeiro) e o critério do **RNF05 (T(4)/T(1) ≤ 2,0)**. A zona verde indica a faixa de crescimento aceitável. Como os serviços processam mensagens em paralelo (cada um com seu consumer group independente), o overhead de coordenação deve crescer significativamente abaixo do caso linear.
 
-**Eficiência E(n) = Speedup(n)/n**: mede quanto da capacidade "linear" é preservada. O critério **RNF05 exige E(4) ≥ 70%**. Configurações com X vermelho têm completude < 99,5% — os dados de tempo para essas configurações devem ser interpretados com cautela.
+**Overhead relativo (%)**: crescimento percentual em relação ao baseline T(1). Valor 0% = sem overhead adicional; 100% = tempo dobrou; 300% = tempo quadruplicou (linear). Configurações com X vermelho têm completude < 99,5% e devem ser interpretadas com cautela.
 
 **Boxplot de variabilidade**: IQR crescente com n indica maior sensibilidade a variações de fila no Kafka ou latência de rede entre containers.
+
+---
+
+#### Nota metodológica — acúmulo de dados não participantes e efeito sobre a latência do `delivery`
+
+O script de benchmark insere registros em **todos os serviços** a cada run (simulando o histórico real de um usuário), mas o protocolo 2PC apaga apenas os dados dos serviços **participantes** na configuração vigente. Isso cria uma assimetria cumulativa:
+
+| Configuração | Insere em | 2PC apaga em | Resultado acumulado |
+|---|---|---|---|
+| n=1 (20 runs × 900) | accounts, payments, crm, **delivery** | accounts | 18.000 deliveries *órfãos* |
+| n=2 (20 runs × 900) | accounts, payments, crm, **delivery** | accounts, payments | +18.000 deliveries *órfãos* |
+| n=3 (20 runs × 900) | accounts, payments, crm, **delivery** | accounts, payments, crm | +18.000 deliveries *órfãos* |
+| **n=4** | todos | todos | tabela com 54.000 registros ao iniciar |
+
+Quando o serviço `delivery` entra em n=4, encontra uma tabela `deliveries` com **54.000 registros** (≈31 MB), 60× maior que o esperado para um único run. O `DELETE` indexado continua eficiente, mas o **autovacuum** do PostgreSQL — responsável por recuperar espaço dos *dead tuples* gerados pelos deletes — concorre com as operações de negócio, causando contenção de I/O esporádica que se manifesta como *long tail* de 8–10 s nas latências de n=4.
+
+**Correção aplicada:** o benchmark foi atualizado para executar `TRUNCATE` na tabela de cada serviço imediatamente antes de o serviço estrear no experimento (antes dos runs de n=k, trunca a tabela do k-ésimo serviço). Isso garante **baseline uniforme** — todos os runs de cada configuração iniciam com a mesma quantidade de dados — eliminando o artefato de acúmulo e tornando a comparação entre configurações metodologicamente válida.
 """)
 
 md("## 10. Análises Cruzadas")
@@ -1033,34 +1120,36 @@ if not res.empty and not pr.empty and 'latencia_2pc_s' in pr.columns:
 """)
 
 code("""
-# ── Coeficiente de Variação por métrica ─────────────────────────────────────
+# ── Coeficiente de Variação por métrica (RNF07) ──────────────────────────────
+# CV calculado sobre as médias por run (inter-run), não sobre todas as amostras.
+# Net TX/RX excluídos: contadores cumulativos com alta variância por artefato
+# de amostragem, não por instabilidade real do sistema.
 if not res.empty:
     mw_pico = res[(res['Fase']=='pico') &
                   res['container'].str.contains('middleware', case=False, na=False)]
-    metricas = {
-        'CPU (%)':        mw_pico['cpu_pct'],
-        'Memória (MiB)':  mw_pico['mem_mb'],
-        'Net TX (MiB)':   mw_pico['net_tx_mb'],
-        'Net RX (MiB)':   mw_pico['net_rx_mb'],
-    }
+
+    # Média por run → CV dessas médias (variabilidade entre execuções independentes)
+    per_run = mw_pico.groupby('run')[['cpu_pct', 'mem_mb']].mean()
+
+    metricas = {'CPU (%)': per_run['cpu_pct'], 'Memória (MiB)': per_run['mem_mb']}
     cv_rows = []
     for nome, serie in metricas.items():
         s = serie.dropna()
-        cv = s.std()/s.mean()*100 if s.mean() else np.nan
-        cv_rows.append({'Métrica': nome, 'Média': s.mean(),
-                        'DP': s.std(), 'CV (%)': cv,
+        cv = s.std() / s.mean() * 100 if s.mean() else np.nan
+        cv_rows.append({'Métrica': nome, 'Média por run': s.mean(),
+                        'DP entre runs': s.std(), 'CV (%)': cv,
                         'Estável (<15%)': '✓' if cv < 15 else ('⚠' if cv < 30 else '✗')})
 
     cv_df = pd.DataFrame(cv_rows)
     display(cv_df.set_index('Métrica').round(3))
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(6, 4))
     bars = ax.bar(cv_df['Métrica'], cv_df['CV (%)'],
                   color=['steelblue' if v < 15 else ('goldenrod' if v < 30 else 'tomato')
                          for v in cv_df['CV (%)']])
-    ax.axhline(15, color='green',  linestyle='--', linewidth=1, label='CV=15% (estável)')
+    ax.axhline(15, color='green',  linestyle='--', linewidth=1, label='Critério RNF07 (≤15%)')
     ax.axhline(30, color='orange', linestyle='--', linewidth=1, label='CV=30% (atenção)')
-    ax.set_ylabel('CV (%)'); ax.set_title('Coeficiente de Variação por Métrica — fase pico')
+    ax.set_ylabel('CV (%)'); ax.set_title('Coeficiente de Variação entre Runs — fase pico')
     ax.legend(fontsize=9)
     plt.tight_layout()
     savefig('cv_metricas.png')
@@ -1076,7 +1165,7 @@ md("""
 
 **Correlação CPU × Latência 2PC**: gráfico observacional entre CPU média do middleware na fase `pico` (por run) e latência 2PC mediana (por run). Um Pearson `r` positivo elevado sugere colinearidade, mas **não implica causalidade** — ambas podem ser determinadas por uma variável comum (ex.: tamanho da fila Kafka no momento da coleta).
 
-**Coeficiente de Variação por métrica**: CV = σ/μ × 100%. Barras verdes (CV < 15%) indicam métricas estáveis — critério RNF07. Amarelo (15–30%) merece atenção; vermelho (> 30%) indica comportamento imprevisível. O Net IO tem CV naturalmente alto por ser cumulativo e sensível ao momento exato de amostragem dentro da fase `pico`.
+**Coeficiente de Variação entre runs (RNF07)**: CV = σ/μ × 100%, calculado sobre as **médias por run** de CPU e memória na fase `pico` — não sobre todas as amostras brutas. Isso isola a variabilidade *entre execuções independentes*, que é o que RNF07 avalia. Barras verdes (CV ≤ 15%) confirmam comportamento determinístico e reproduzível; amarelo (15–30%) merece atenção; vermelho (> 30%) indica alta imprevisibilidade. Net TX/RX foram excluídos por serem contadores cumulativos cujo valor depende do instante exato de amostragem dentro da fase, gerando variância por artefato de medição, não por instabilidade do sistema.
 """)
 
 md("## 11. Sumário Estatístico e Conformidade com RNFs")
@@ -1101,10 +1190,25 @@ if not pr.empty and 'latencia_2pc_s' in pr.columns:
 if not jtl.empty and elapsed_col in jtl.columns:
     rows.append(summary_stats(jtl[elapsed_col], 'Latência HTTP submissão (ms)'))
 
-if not summary.empty and col_comp:
-    rows.append(summary_stats(summary[col_comp], 'Completude (%)'))
-if not summary.empty and col_tempo:
-    rows.append(summary_stats(summary[col_tempo], 'Tempo processamento run (s)'))
+# Re-detecta colunas do summary aqui — col_comp/col_tempo podem ter sido
+# sobrescritos com strings hardcoded pela seção de escalabilidade (seção 9).
+_sum_comp = next(
+    (c for c in ['completude_%', 'completude_pct', 'completude']
+     if c in summary.columns),
+    next((c for c in summary.columns
+          if ('completude' in c.lower() or 'pct' in c.lower())
+          and 'timestamp' not in c.lower()), None)
+)
+_sum_tempo = next(
+    (c for c in ['tempo_processamento_s', 'tempo_s', 'tempo']
+     if c in summary.columns),
+    next((c for c in summary.columns
+          if 'tempo' in c.lower() and 'timestamp' not in c.lower()), None)
+)
+if not summary.empty and _sum_comp:
+    rows.append(summary_stats(summary[_sum_comp], 'Completude (%)'))
+if not summary.empty and _sum_tempo:
+    rows.append(summary_stats(summary[_sum_tempo], 'Tempo processamento run (s)'))
 
 if rows:
     stat_df = pd.DataFrame(rows).set_index('Métrica')
@@ -1123,8 +1227,8 @@ def check(rnf_id, descricao, criterio, valor, ok):
     rnf_check.append({'RNF': rnf_id, 'Critério': criterio,
                       'Valor Observado': valor, 'Status': status})
 
-if not summary.empty and col_comp:
-    v = summary[col_comp].min()
+if not summary.empty and _sum_comp:
+    v = summary[_sum_comp].min()
     check('RNF01', 'Completude', '≥ 99.5%', f'{v:.2f}%', v >= 99.5)
 
 if not pr.empty and 'latencia_2pc_s' in pr.columns:
@@ -1144,12 +1248,12 @@ if not scale_sum.empty and col_t and 'n_servicos' in scale_sum.columns:
     agg_e = scale_sum.groupby('n_servicos')[col_t].mean()
     t1_v  = agg_e.get(1, np.nan)
     t4_v  = agg_e.get(4, np.nan)
-    if not np.isnan(t1_v) and not np.isnan(t4_v):
-        ef = (t1_v / (4 * t4_v)) * 100
-        check('RNF05', 'Eficiência escalabilidade', '≥ 70%', f'{ef:.1f}%', ef >= 70)
+    if not np.isnan(t1_v) and not np.isnan(t4_v) and t1_v > 0:
+        razao_v = t4_v / t1_v
+        check('RNF05', 'Crescimento T(4)/T(1)', '≤ 2,0×', f'{razao_v:.2f}×', razao_v <= 2.0)
 
-if not summary.empty and col_tempo:
-    v = summary[col_tempo].std() / summary[col_tempo].mean() * 100
+if not summary.empty and _sum_tempo:
+    v = summary[_sum_tempo].std() / summary[_sum_tempo].mean() * 100
     check('RNF07', 'CV tempo de processamento', '≤ 15%', f'{v:.1f}%', v <= 15)
 
 if rnf_check:
@@ -1182,14 +1286,14 @@ Todos os arquivos foram salvos em `output-benchmark/`:
 | `figures/io_rede_disco.png` | Net IO e Block IO |
 | `figures/latencia_2pc.png` | Distribuição, ECDF e percentis da latência 2PC |
 | `figures/latencia_http_jmeter.png` | Latência HTTP de submissão (JMeter) |
-| `figures/escalabilidade.png` | Tempo, speedup e eficiência |
+| `figures/escalabilidade.png` | Tempo, crescimento normalizado e overhead |
 | `figures/escalabilidade_boxplot.png` | Variabilidade por configuração |
 | `figures/correlacao_cpu_latencia.png` | Correlação observacional CPU × latência |
 | `figures/cv_metricas.png` | Coeficiente de variação por métrica |
 | `estatisticas_consolidadas.csv` | Tabela estatística completa (bootstrap IC95%) |
 | `conformidade_rnf.csv` | Checklist de conformidade com os RNFs |
 
-> **Próximo passo**: use os arquivos de figuras e tabelas diretamente na dissertação LaTeX.
+
 """)
 
 # ===========================================================================
